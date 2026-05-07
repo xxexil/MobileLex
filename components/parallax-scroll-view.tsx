@@ -48,7 +48,12 @@ export default function ParallaxScrollView({
     <Animated.ScrollView
       ref={scrollRef}
       style={{ backgroundColor, flex: 1 }}
-      scrollEventThrottle={16}>
+      scrollEventThrottle={16}
+      accessible={true}
+      accessibilityRole="scrollbar"
+      accessibilityLabel="Scrollable content area"
+      accessibilityHint="Swipe up or down to scroll through the content."
+    >
       <Animated.View
         style={[
           styles.header,

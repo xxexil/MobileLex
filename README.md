@@ -25,6 +25,23 @@ In the output, you'll find options to open the app in a
 
 You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
 
+## Laravel API Login Setup
+
+To log in with user accounts stored in your database, point this app to your Laravel API:
+
+1. Start your Laravel API on port 8000.
+2. Create a .env.local file in this folder (LexConnectMobile) and set:
+
+EXPO_PUBLIC_API_BASE=http://YOUR_PC_LAN_IP:8000/api
+
+Runtime behavior now:
+
+- Android emulator auto-uses http://10.0.2.2:8000/api
+- iOS simulator and web auto-use http://127.0.0.1:8000/api
+- Physical phone uses EXPO_PUBLIC_API_BASE from .env.local
+
+3. Restart Expo after editing .env.local.
+
 ## Get a fresh project
 
 When you're ready, run:

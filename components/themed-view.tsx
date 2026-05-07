@@ -10,5 +10,13 @@ export type ThemedViewProps = ViewProps & {
 export function ThemedView({ style, lightColor, darkColor, ...otherProps }: ThemedViewProps) {
   const backgroundColor = useThemeColor({ light: lightColor, dark: darkColor }, 'background');
 
-  return <View style={[{ backgroundColor }, style]} {...otherProps} />;
+  // Optionally add accessibilityRole if passed in otherProps
+  return (
+    <View
+      style={[{ backgroundColor }, style]}
+      accessibilityRole={otherProps.accessibilityRole}
+      accessibilityLabel={otherProps.accessibilityLabel}
+      {...otherProps}
+    />
+  );
 }

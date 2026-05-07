@@ -16,7 +16,13 @@ export function Collapsible({ children, title }: PropsWithChildren & { title: st
       <TouchableOpacity
         style={styles.heading}
         onPress={() => setIsOpen((value) => !value)}
-        activeOpacity={0.8}>
+        activeOpacity={0.8}
+        accessible={true}
+        accessibilityRole="button"
+        accessibilityLabel={isOpen ? `Collapse section: ${title}` : `Expand section: ${title}`}
+        accessibilityState={{ expanded: isOpen }}
+        accessibilityHint={isOpen ? `Collapse the ${title} section to hide its content.` : `Expand the ${title} section to show more information.`}
+      >
         <IconSymbol
           name="chevron.right"
           size={18}

@@ -3,6 +3,9 @@ import Animated from 'react-native-reanimated';
 export function HelloWave() {
   return (
     <Animated.Text
+      accessible={true}
+      accessibilityRole="image"
+      accessibilityLabel="Waving hand emoji"
       style={{
         fontSize: 28,
         lineHeight: 32,

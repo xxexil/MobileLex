@@ -1,29 +1,74 @@
-/**
- * Below are the colors that are used in the app. The colors are defined in the light and dark mode.
- * There are many other ways to style your app. For example, [Nativewind](https://www.nativewind.dev/), [Tamagui](https://tamagui.dev/), [unistyles](https://reactnativeunistyles.vercel.app), etc.
- */
-
 import { Platform } from 'react-native';
 
-const tintColorLight = '#0a7ea4';
-const tintColorDark = '#fff';
-
 export const Colors = {
+  primary: '#1E2D4D',
+  primaryDark: '#162240',
+  primaryLight: '#2D4A7A',
+  secondary: '#B5860D',
+  secondaryLight: '#E0C48F',
+  background: '#F4F6FB',
+  card: '#FFFFFF',
+  text: '#1E293B',
+  textMuted: '#6B7280',
+  textLight: '#9CA3AF',
+  border: '#E2E8F0',
+  success: '#16A34A',
+  error: '#DC2626',
+  warning: '#D97706',
+  info: '#2563EB',
+  pending: '#D97706',
+  upcoming: '#2563EB',
+  completed: '#16A34A',
+  cancelled: '#DC2626',
+  available: '#16A34A',
+  busy: '#D97706',
+  offline: '#6B7280',
   light: {
-    text: '#11181C',
-    background: '#fff',
-    tint: tintColorLight,
-    icon: '#687076',
-    tabIconDefault: '#687076',
-    tabIconSelected: tintColorLight,
+    text: '#1A1A2E',
+    background: '#F5F7FA',
+    tint: '#1B3A6B',
+    icon: '#6B7280',
+    tabIconDefault: '#9CA3AF',
+    tabIconSelected: '#1B3A6B',
   },
   dark: {
-    text: '#ECEDEE',
-    background: '#151718',
-    tint: tintColorDark,
-    icon: '#9BA1A6',
-    tabIconDefault: '#9BA1A6',
-    tabIconSelected: tintColorDark,
+    text: '#F9FAFB',
+    background: '#0F172A',
+    tint: '#C9A96E',
+    icon: '#9CA3AF',
+    tabIconDefault: '#6B7280',
+    tabIconSelected: '#C9A96E',
+  },
+};
+
+export const RoleColors = {
+  client: {
+    shell: '#1E2D4D',
+    shellDark: '#162240',
+    accent: '#B5860D',
+    accentSoft: '#FEF3C7',
+    background: '#F4F6FB',
+  },
+  lawyer: {
+    shell: '#1E2D4D',
+    shellDark: '#162240',
+    accent: '#B5860D',
+    accentSoft: '#FEF3C7',
+    background: '#F4F6FB',
+  },
+  lawFirm: {
+    shell: '#1A3D2B',
+    shellDark: '#123120',
+    accent: '#D9B45A',
+    accentSoft: '#ECFDF3',
+    background: '#F0F2F5',
+  },
+  admin: {
+    shell: '#1A1A2E',
+    shellDark: '#16213E',
+    accent: '#7C3AED',
+    accentSoft: '#EDE9FE',
+    background: '#F1F3F8',
   },
 };
 

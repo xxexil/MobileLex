@@ -17,8 +17,15 @@ export function ThemedText({
 }: ThemedTextProps) {
   const color = useThemeColor({ light: lightColor, dark: darkColor }, 'text');
 
+  // Add accessibilityRole for links and headers
+  let accessibilityRole: TextProps['accessibilityRole'] | undefined;
+  if (type === 'link') accessibilityRole = 'link';
+  if (type === 'title' || type === 'subtitle') accessibilityRole = 'header';
+
   return (
     <Text
+      accessibilityRole={accessibilityRole}
+      accessibilityLabel={rest.accessibilityLabel}
       style={[
         { color },
         type === 'default' ? styles.default : undefined,
