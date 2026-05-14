@@ -67,9 +67,13 @@ export default function LawFirmLayout() {
   }, [refreshLawFirmUnreadTick]);
 
   useEffect(() => {
-    const isDashboard = pathname === '/(lawfirm)' || pathname === '/(lawfirm)/' || pathname === '/(lawfirm)/index';
-    const isSettings = pathname === '/(lawfirm)/settings';
-    const isProfile = pathname === '/(lawfirm)/profile';
+    const isDashboard = pathname === '/'
+      || pathname === '/index'
+      || pathname === '/(lawfirm)'
+      || pathname === '/(lawfirm)/'
+      || pathname === '/(lawfirm)/index';
+    const isSettings = pathname === '/settings' || pathname === '/(lawfirm)/settings';
+    const isProfile = pathname === '/profile' || pathname === '/(lawfirm)/profile';
 
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
       if (isDashboard) return false;
@@ -180,9 +184,9 @@ export default function LawFirmLayout() {
         <Tabs.Screen
           name="profile"
           options={{
-            title: 'Profile',
+            title: 'Firm Profile',
             tabBarIcon: ({ focused, color, size }) => (
-              <AnimatedTabIcon focused={focused} name="person" size={size} color={color} />
+              <AnimatedTabIcon focused={focused} name="business" size={size} color={color} />
             ),
           }}
         />

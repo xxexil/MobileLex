@@ -28,6 +28,7 @@ import { paymongoService } from '@/services/paymongo';
 import { LARAVEL_API_BASE } from '@/services/endpoints';
 import EmptyState from '@/components/EmptyState';
 import { PaymentProcessingModal } from '@/components/PaymentProcessingModal';
+import FeedbackModal from '@/components/FeedbackModal';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useAuth } from '@/context/auth';
 import {
@@ -134,6 +135,14 @@ function formatDateValue(value: Date) {
 
 const BOOKING_PAYMENT_METHODS = ['card', 'gcash', 'dob'];
 
+type FeedbackState = {
+  visible: boolean;
+  title: string;
+  message: string;
+  tone?: 'success' | 'warning' | 'danger' | 'info';
+  primaryLabel?: string;
+};
+
 export default function ClientConsultations() {
   const { user, token } = useAuth();
   const insets = useSafeAreaInsets();
@@ -160,6 +169,20 @@ export default function ClientConsultations() {
   const [showPaymentProcessing, setShowPaymentProcessing] = useState(false);
   const [currentPaymentId, setCurrentPaymentId] = useState<number | null>(null);
   const [currentConsultationCode, setCurrentConsultationCode] = useState<string>('');
+  const [feedback, setFeedback] = useState<FeedbackState>({
+    visible: false,
+    title: '',
+    message: '',
+    tone: 'success',
+  });
+
+  const showFeedback = useCallback((next: Omit<FeedbackState, 'visible'>) => {
+    setFeedback({ visible: true, ...next });
+  }, []);
+
+  const closeFeedback = useCallback(() => {
+    setFeedback((current) => ({ ...current, visible: false }));
+  }, []);
 
   // Example: open booking modal for a lawyer (replace with your lawyer selection logic)
   function openBooking(lawyerId: number) {
@@ -266,7 +289,12 @@ export default function ClientConsultations() {
           setCurrentConsultationCode('');
           closeBookingModal();
           await load();
-          Alert.alert('Returned to App', 'Payment return received. We are updating the status in the background.');
+          showFeedback({
+            title: 'Payment submitted',
+            message: 'We received the payment return and are confirming it in the background.',
+            tone: 'info',
+            primaryLabel: 'Okay',
+          });
 
           void (async () => {
             try {
@@ -286,17 +314,24 @@ export default function ClientConsultations() {
           setShowPaymentProcessing(false);
           setCurrentPaymentId(null);
           setCurrentConsultationCode('');
-          Alert.alert('Cancelled', 'Your booking was created but payment was not completed. You can resume payment later from your payment history.');
+          showFeedback({
+            title: 'Checkout cancelled',
+            message: 'Your booking was created, but payment was not completed. You can resume payment from your payment history.',
+            tone: 'warning',
+            primaryLabel: 'Got it',
+          });
           await load();
           return;
         }
       } else {
         console.warn('⚠️ No checkout URL available');
         closeBookingModal();
-        Alert.alert(
-          'Booking Created',
-          `Your consultation request ${consultationCode} has been created. Payment will be available shortly.`
-        );
+        showFeedback({
+          title: 'Booking created',
+          message: `Your consultation request ${consultationCode} has been created. Payment will be available shortly.`,
+          tone: 'info',
+          primaryLabel: 'Okay',
+        });
         await load();
         return;
       }
@@ -766,21 +801,41 @@ export default function ClientConsultations() {
         await load();
 
         if (payment?.status === 'paid' || payment?.status === 'downpayment_paid') {
-          Alert.alert('Payment Confirmed', 'Your consultation downpayment is now confirmed.');
+          showFeedback({
+            title: 'Payment confirmed',
+            message: 'Your consultation downpayment is confirmed and your booking is ready.',
+            tone: 'success',
+            primaryLabel: 'View booking',
+          });
           return;
         }
 
         if (payment?.status === 'failed') {
-          Alert.alert('Payment Failed', 'The downpayment did not complete successfully.');
+          showFeedback({
+            title: 'Payment failed',
+            message: 'The downpayment did not complete successfully. Please try again when you are ready.',
+            tone: 'danger',
+            primaryLabel: 'Okay',
+          });
           return;
         }
 
-        Alert.alert('Processing', 'The payment is still being confirmed. Please refresh again shortly.');
+        showFeedback({
+          title: 'Still confirming',
+          message: 'The payment is still being confirmed. Please refresh again shortly.',
+          tone: 'info',
+          primaryLabel: 'Okay',
+        });
         return;
       }
 
       if (result.type === 'cancel') {
-        Alert.alert('Checkout Cancelled', 'The downpayment remains pending for this consultation.');
+        showFeedback({
+          title: 'Checkout cancelled',
+          message: 'The downpayment remains pending for this consultation.',
+          tone: 'warning',
+          primaryLabel: 'Got it',
+        });
       }
     } catch (err: any) {
       if (isMissingPaymentResumeRoute(err)) {
@@ -846,15 +901,30 @@ export default function ClientConsultations() {
         }
         await load();
         if (confirmed) {
-          Alert.alert('Payment Complete', 'Your remaining balance has been paid. Thank you!');
+          showFeedback({
+            title: 'Payment complete',
+            message: 'Your remaining balance has been paid. Thank you.',
+            tone: 'success',
+            primaryLabel: 'Done',
+          });
         } else {
-          Alert.alert('Processing', 'Payment is still being confirmed. Please refresh shortly.');
+          showFeedback({
+            title: 'Still confirming',
+            message: 'Payment is still being confirmed. Please refresh shortly.',
+            tone: 'info',
+            primaryLabel: 'Okay',
+          });
         }
         return;
       }
 
       if (result.type === 'cancel') {
-        Alert.alert('Cancelled', 'Balance payment was cancelled. You can pay the remaining balance anytime from this screen.');
+        showFeedback({
+          title: 'Payment cancelled',
+          message: 'Balance payment was cancelled. You can pay the remaining balance anytime from this screen.',
+          tone: 'warning',
+          primaryLabel: 'Got it',
+        });
       }
     } catch (err: any) {
       Alert.alert('Payment Error', err?.response?.data?.error || err?.response?.data?.message || err?.message || 'Failed to initiate balance payment.');
@@ -1013,16 +1083,36 @@ export default function ClientConsultations() {
           setShowPaymentProcessing(false);
           setCurrentPaymentId(null);
           setCurrentConsultationCode('');
-          Alert.alert('Success', 'Consultation booked and downpayment confirmed.');
+          showFeedback({
+            title: 'Payment confirmed',
+            message: 'Your consultation is booked and the downpayment is confirmed.',
+            tone: 'success',
+            primaryLabel: 'View booking',
+          });
           load();
         }}
         onError={(error) => {
           setShowPaymentProcessing(false);
           setCurrentPaymentId(null);
           setCurrentConsultationCode('');
-          Alert.alert('Payment Error', error);
+          showFeedback({
+            title: 'Payment error',
+            message: error,
+            tone: 'danger',
+            primaryLabel: 'Okay',
+          });
           load();
         }}
+      />
+
+      <FeedbackModal
+        visible={feedback.visible}
+        title={feedback.title}
+        message={feedback.message}
+        tone={feedback.tone}
+        primaryLabel={feedback.primaryLabel}
+        onPrimary={closeFeedback}
+        onClose={closeFeedback}
       />
 
       {/* Booking Modal (outside SafeAreaView for correct JSX structure) */}

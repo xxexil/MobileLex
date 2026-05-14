@@ -251,6 +251,7 @@ export default function LawyerSettingsScreen() {
       location: draft.location.trim(),
       hourly_rate: draft.hourly_rate.trim(),
       experience_years: draft.experience_years.trim(),
+      bio: draft.bio.trim(),
     };
     if (!trimmed.name) {
       Alert.alert('Required', 'Name cannot be empty.');
@@ -685,7 +686,7 @@ export default function LawyerSettingsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  content: { padding: 14, paddingBottom: 40 },
+  content: { padding: 14, paddingBottom: 140 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.background },
   pageTitle: { fontSize: 24, fontWeight: '800', color: Colors.text, marginBottom: 4, marginTop: 8 },
   pageSubtitle: { fontSize: 13, color: Colors.textMuted, marginBottom: 16, lineHeight: 18 },

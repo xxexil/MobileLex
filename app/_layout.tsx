@@ -1,6 +1,8 @@
+import 'react-native-gesture-handler';
 import { useEffect, useRef, useState } from 'react';
 import type { EventSubscription } from 'expo-notifications';
 import Constants from 'expo-constants';
+import * as SplashScreen from 'expo-splash-screen';
 import LegalAcceptanceDialog from '@/components/LegalAcceptanceDialog';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { registerForPushNotifications, unregisterPushToken } from '@/services/push-notifications';
@@ -35,6 +37,7 @@ import { Colors, RoleColors } from '@/constants/theme';
 import { LinearGradient } from 'expo-linear-gradient';
 import ActivityBanner from '@/components/ActivityBanner';
 import SecurityLockScreen from '@/components/SecurityLockScreen';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 
 function RootNavigator() {
@@ -69,6 +72,24 @@ function RootNavigator() {
       : user?.role === 'lawyer'
         ? 'Lawyer'
         : 'Client';
+
+  useEffect(() => {
+    if (isLoading || legalAccepted === null) return;
+
+    void SplashScreen.hideAsync().catch(() => {
+      // The splash screen can already be hidden during fast refresh.
+    });
+  }, [isLoading, legalAccepted]);
+
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      void SplashScreen.hideAsync().catch(() => {
+        // Keep boot resilient if native splash state is already cleared.
+      });
+    }, 5000);
+
+    return () => clearTimeout(timeout);
+  }, []);
 
   const scheduleRealtimeNotification = async ({
     title,
@@ -830,7 +851,7 @@ export default function RootLayout() {
   const colorScheme = useColorScheme();
 
   return (
-    <View style={{ flex: 1, backgroundColor: Colors.primary }}>
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: Colors.primary }}>
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
         <AuthProvider>
           <OverlayProvider>
@@ -841,6 +862,6 @@ export default function RootLayout() {
         </AuthProvider>
         <StatusBar style="auto" />
       </ThemeProvider>
-    </View>
+    </GestureHandlerRootView>
   );
 }

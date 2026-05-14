@@ -2,11 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Image,
-  LayoutChangeEvent,
-  PanResponder,
-  Pressable,
   RefreshControl,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -16,7 +12,13 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
-import Animated, { FadeInDown } from 'react-native-reanimated';
+import Animated, {
+  FadeInDown,
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+} from 'react-native-reanimated';
+import { Gesture, GestureDetector, ScrollView } from 'react-native-gesture-handler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, RoleColors } from '@/constants/theme';
@@ -24,6 +26,7 @@ import { useAuth } from '@/context/auth';
 import { useNotifications } from '@/context/notifications';
 import { clientApi } from '@/services/api';
 import { resolveStorageUrl } from '@/services/endpoints';
+import DashboardPopupBanner from '@/components/DashboardPopupBanner';
 
 const NOTIF_SEEN_KEY = 'client_notifications_seen_at';
 const SAVED_LAWYERS_KEY = 'client_saved_lawyers_v1';
@@ -177,7 +180,6 @@ export default function ClientDashboardScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [appointmentTab, setAppointmentTab] = useState<ConsultationStatus>('upcoming');
-  const [sliderWidth, setSliderWidth] = useState(0);
   const [isSlidingRate, setIsSlidingRate] = useState(false);
   const [selectedSpecialty, setSelectedSpecialty] = useState('All');
   const [selectedLocation, setSelectedLocation] = useState('All');
@@ -188,9 +190,9 @@ export default function ClientDashboardScreen() {
   const [minRating, setMinRating] = useState(0);
   const [availabilityFilter, setAvailabilityFilter] = useState('Any');
   const [savedLawyerCount, setSavedLawyerCount] = useState(0);
-  const sliderTrackRef = useRef<View | null>(null);
   const sliderWidthRef = useRef(0);
-  const sliderPageXRef = useRef(0);
+  const maxRateRef = useRef<number | null>(null);
+  const lastSliderCommitRef = useRef(0);
 
   const rateBounds = useMemo(() => {
     const values = lawyers
@@ -331,71 +333,88 @@ export default function ClientDashboardScreen() {
   const sliderMax = Math.max(rateBounds.max, rateBounds.min + 1);
   const effectiveMaxRate = maxRate ?? sliderMax;
   const sliderRatio = Math.min(1, Math.max(0, (effectiveMaxRate - sliderMin) / (sliderMax - sliderMin)));
+  const sliderThumbSize = 34;
+  const sliderThumbRadius = sliderThumbSize / 2;
+  const sliderPosition = useSharedValue(0);
+  const sliderWidthShared = useSharedValue(0);
 
-  const updateRateFromPosition = useCallback((positionX: number) => {
+  useEffect(() => {
+    maxRateRef.current = maxRate;
+  }, [maxRate]);
+
+  const commitRateFromPosition = useCallback((positionX: number, force = false) => {
     const width = sliderWidthRef.current;
     if (!width) return;
 
     const clampedX = Math.max(0, Math.min(positionX, width));
     const ratio = clampedX / width;
     const next = Math.round(sliderMin + (sliderMax - sliderMin) * ratio);
+    if (maxRateRef.current === next) return;
+    const now = Date.now();
+    if (!force && now - lastSliderCommitRef.current < 64) return;
+    lastSliderCommitRef.current = now;
+    maxRateRef.current = next;
     setMaxRate(next);
   }, [sliderMin, sliderMax]);
 
-  const syncSliderMetrics = useCallback(() => {
-    sliderTrackRef.current?.measureInWindow((x, _y, width) => {
-      if (!Number.isFinite(width) || width <= 0) return;
-      sliderPageXRef.current = x;
-      sliderWidthRef.current = width;
-      setSliderWidth(width);
-    });
-  }, []);
+  const sliderGesture = useMemo(() => Gesture.Pan()
+    .minDistance(1)
+    .activeOffsetX([-1, 1])
+    .shouldCancelWhenOutside(false)
+    .onBegin((event) => {
+      const width = sliderWidthShared.value;
+      if (width <= 0) return;
+      const nextX = Math.max(0, Math.min(event.x, width));
+      sliderPosition.value = nextX;
+      runOnJS(setIsSlidingRate)(true);
+      runOnJS(commitRateFromPosition)(nextX, true);
+    })
+    .onUpdate((event) => {
+      const width = sliderWidthShared.value;
+      if (width <= 0) return;
+      const nextX = Math.max(0, Math.min(event.x, width));
+      sliderPosition.value = nextX;
+      runOnJS(commitRateFromPosition)(nextX, false);
+    })
+    .onFinalize(() => {
+      runOnJS(commitRateFromPosition)(sliderPosition.value, true);
+      runOnJS(setIsSlidingRate)(false);
+    }), [commitRateFromPosition, sliderPosition, sliderWidthShared]);
 
-  const updateRateFromPageX = useCallback((pageX: number) => {
-    updateRateFromPosition(pageX - sliderPageXRef.current);
-  }, [updateRateFromPosition]);
-
-  const sliderResponder = useMemo(() => PanResponder.create({
-    onStartShouldSetPanResponder: () => true,
-    onMoveShouldSetPanResponder: () => true,
-    onPanResponderTerminationRequest: () => false,
-    onPanResponderGrant: (event) => {
-      setIsSlidingRate(true);
-      syncSliderMetrics();
-      updateRateFromPageX(event.nativeEvent.pageX);
-    },
-    onPanResponderMove: (event) => {
-      updateRateFromPageX(event.nativeEvent.pageX);
-    },
-    onPanResponderRelease: () => {
-      setIsSlidingRate(false);
-    },
-    onPanResponderTerminate: () => {
-      setIsSlidingRate(false);
-    },
-  }), [syncSliderMetrics, updateRateFromPageX]);
-
-  const onSliderLayout = useCallback((event: LayoutChangeEvent) => {
+  const onSliderLayout = useCallback((event: { nativeEvent: { layout: { width: number } } }) => {
     const nextWidth = event.nativeEvent.layout.width;
     sliderWidthRef.current = nextWidth;
-    setSliderWidth(nextWidth);
-    requestAnimationFrame(syncSliderMetrics);
-  }, [syncSliderMetrics]);
+    sliderWidthShared.value = nextWidth;
+    sliderPosition.value = nextWidth * sliderRatio;
+  }, [sliderPosition, sliderRatio, sliderWidthShared]);
 
-  const onSliderPress = useCallback((event: any) => {
-    syncSliderMetrics();
-    updateRateFromPageX(event.nativeEvent.pageX);
-  }, [syncSliderMetrics, updateRateFromPageX]);
+  useEffect(() => {
+    sliderPosition.value = sliderWidthRef.current * sliderRatio;
+  }, [sliderPosition, sliderRatio]);
+
+  const sliderFillAnimatedStyle = useAnimatedStyle(() => ({
+    width: sliderPosition.value,
+  }));
+
+  const sliderThumbAnimatedStyle = useAnimatedStyle(() => ({
+    left: Math.min(
+      Math.max(sliderPosition.value - sliderThumbRadius, -2),
+      Math.max(-2, sliderWidthShared.value - sliderThumbSize + 2)
+    ),
+  }));
 
   React.useEffect(() => {
     setMaxRate((current) => {
       if (current == null) return sliderMax;
-      return Math.min(sliderMax, Math.max(sliderMin, current));
+      const next = Math.min(sliderMax, Math.max(sliderMin, current));
+      maxRateRef.current = next;
+      return current === next ? current : next;
     });
   }, [sliderMax, sliderMin]);
 
   React.useEffect(() => {
-    setMaxRateInput(String(effectiveMaxRate));
+    const next = String(effectiveMaxRate);
+    setMaxRateInput((current) => (current === next ? current : next));
   }, [effectiveMaxRate]);
 
   const filteredAppointments = useMemo(() => {
@@ -487,10 +506,6 @@ export default function ClientDashboardScreen() {
     if (availabilityFilter !== 'Any') labels.push(availabilityFilter);
     return labels.join(' | ');
   }, [availabilityFilter, maxRateInput, minExperience, minRating, minRateInput, selectedLocation, selectedSpecialty, sliderMax]);
-  const sliderThumbLeft = sliderWidth
-    ? Math.min(Math.max(sliderWidth * sliderRatio - 9, -1), sliderWidth - 17)
-    : 0;
-
   if (loading) {
     return (
       <View style={styles.loadingWrap}>
@@ -501,6 +516,15 @@ export default function ClientDashboardScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+      <DashboardPopupBanner
+        role="client"
+        storageKey={`client-dashboard-popup-${user?.id ?? 'guest'}`}
+        visible={upcomingCount === 0}
+        title="Need legal help today?"
+        message="Find available lawyers, compare rates, and book a consultation in minutes."
+        primaryLabel="Find Lawyers"
+        onPrimaryPress={() => router.push('/(client)/lawyers' as any)}
+      />
       <ScrollView
         scrollEnabled={!isSlidingRate}
         contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 168 }]}
@@ -1021,23 +1045,27 @@ export default function ClientDashboardScreen() {
 
           <Text style={styles.rateText}>Max Rate: {formatMoney(effectiveMaxRate)}/hr</Text>
 
-          <Pressable onPress={onSliderPress}>
+          <GestureDetector gesture={sliderGesture}>
             <View
-              ref={sliderTrackRef}
-              style={styles.sliderTrack}
-              onLayout={onSliderLayout}
-              collapsable={false}
-              {...sliderResponder.panHandlers}
+              style={styles.sliderTouchArea}
+              accessibilityRole="adjustable"
+              accessibilityLabel="Maximum hourly rate"
             >
-              <View style={[styles.sliderFill, { width: sliderWidth ? sliderWidth * sliderRatio : `${sliderRatio * 100}%` }]} />
               <View
-                style={[
-                  styles.sliderThumb,
-                  { left: sliderThumbLeft },
-                ]}
-              />
+                style={styles.sliderTrack}
+                onLayout={onSliderLayout}
+                collapsable={false}
+              >
+                <Animated.View style={[styles.sliderFill, sliderFillAnimatedStyle]} />
+                <Animated.View
+                  style={[
+                    styles.sliderThumb,
+                    sliderThumbAnimatedStyle,
+                  ]}
+                />
+              </View>
             </View>
-          </Pressable>
+          </GestureDetector>
 
           <View style={styles.sliderLabels}>
             <Text style={styles.sliderLabel}>{formatMoney(sliderMin)}</Text>
@@ -1918,28 +1946,39 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     marginTop: 14,
-    marginBottom: 12,
+    marginBottom: 6,
+  },
+  sliderTouchArea: {
+    minHeight: 60,
+    justifyContent: 'center',
+    marginBottom: 4,
   },
   sliderTrack: {
-    height: 5,
+    height: 10,
     borderRadius: 999,
     backgroundColor: '#D9DEE8',
-    marginBottom: 10,
     justifyContent: 'center',
     position: 'relative',
   },
   sliderFill: {
-    height: 5,
+    height: 10,
     borderRadius: 999,
     backgroundColor: RoleColors.client.shell,
   },
   sliderThumb: {
     position: 'absolute',
-    width: 18,
-    height: 18,
-    borderRadius: 9,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     backgroundColor: RoleColors.client.shell,
-    top: -6.5,
+    top: -12,
+    borderWidth: 3,
+    borderColor: '#FFFFFF',
+    shadowColor: '#102042',
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 4,
   },
   sliderLabels: {
     flexDirection: 'row',

@@ -620,7 +620,7 @@ function EditField({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  content: { padding: 12, paddingBottom: 40 },
+  content: { padding: 12, paddingBottom: 140 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.background },
   pageTitle: { fontSize: 24, fontWeight: '800', color: Colors.text, marginBottom: 4, marginTop: 8 },
   pageSubtitle: { fontSize: 13, color: Colors.textMuted, marginBottom: 16, lineHeight: 18 },

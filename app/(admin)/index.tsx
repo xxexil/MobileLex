@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Modal, Platform, Pressable, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { Colors, RoleColors } from '@/constants/theme';
@@ -84,6 +84,10 @@ export default function AdminHomeScreen() {
     const payload = dashboard?.recent_users ?? dashboard?.recentUsers ?? [];
     return Array.isArray(payload) ? payload.slice(0, 4) : [];
   }, [dashboard]);
+  const todayLabel = useMemo(
+    () => new Date().toLocaleDateString('en-PH', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }),
+    []
+  );
 
   const load = useCallback(async () => {
     if (isPreview) {
@@ -175,31 +179,52 @@ export default function AdminHomeScreen() {
         contentContainerStyle={styles.content}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[RoleColors.admin.accent]} />}
       >
-      <View style={styles.headerRow}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>{avatarLetter}</Text>
+      <View style={styles.webAdminShell}>
+        <View style={styles.webBrandRow}>
+          <View style={styles.webBrandIcon}>
+            <Ionicons name="shield" size={24} color="#FFFFFF" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.webBrandTitle}>LexConnect</Text>
+            <Text style={styles.webBrandSub}>ADMIN PORTAL</Text>
+          </View>
+          <View style={styles.webAdminBadge}>
+            <Ionicons name="shield" size={13} color="#FFFFFF" />
+            <Text style={styles.webAdminBadgeText}>Admin</Text>
+          </View>
         </View>
-        <View>
-          <Text style={styles.welcomeText}>Welcome back,</Text>
-          <Text style={styles.username}>{displayName}</Text>
+
+        <View style={styles.webAdminCard}>
+          <View style={styles.webAdminAvatar}>
+            <Text style={styles.webAdminAvatarText}>{avatarLetter}</Text>
+          </View>
+          <View>
+            <Text style={styles.webAdminName}>{displayName}</Text>
+            <Text style={styles.webAdminRole}>Super Admin</Text>
+          </View>
         </View>
-        <TouchableOpacity style={styles.bellBtn} onPress={() => router.push('/notifications')}>
-          <Ionicons name="notifications-outline" size={20} color={RoleColors.admin.accent} />
-        </TouchableOpacity>
       </View>
 
-      <View style={styles.hero}>
-        <View style={styles.heroBadge}>
-          <Text style={styles.heroBadgeText}>ADMIN PANEL</Text>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.webNavScroll} contentContainerStyle={styles.webNavRow}>
+        <AdminNavChip active icon="pie-chart" label="Dashboard" onPress={() => router.push('/(admin)' as any)} />
+        <AdminNavChip icon="people" label="All Users" onPress={() => router.push('/(admin)/all-users' as any)} />
+        <AdminNavChip icon="briefcase" label="Lawyers" onPress={() => router.push('/(admin)/lawyers' as any)} />
+        <AdminNavChip icon="business" label="Law Firms" onPress={() => router.push('/(admin)/law-firms' as any)} />
+        <AdminNavChip icon="calendar" label="Consultations" onPress={() => router.push('/(admin)/consultations' as any)} />
+        <AdminNavChip icon="shield-checkmark" label="Fraud Review" onPress={() => router.push('/(admin)/fraud-review' as any)} />
+      </ScrollView>
+
+      <View style={styles.webPageHeader}>
+        <View>
+          <Text style={styles.webPageTitle}>Dashboard</Text>
+          <Text style={styles.webPageDate}>{todayLabel}</Text>
         </View>
-        <Text style={styles.heroTitle}>Control Center</Text>
-        <Text style={styles.heroDesc}>Manage platform operations, monitor activity, and review system status.</Text>
-        {isPreview && (
-          <View style={styles.previewChip}>
-            <Ionicons name="flask-outline" size={14} color={RoleColors.admin.shell} />
-            <Text style={styles.previewText}>Preview Mode</Text>
+        {isPreview ? (
+          <View style={styles.webPreviewPill}>
+            <Ionicons name="flask-outline" size={13} color={RoleColors.admin.accent} />
+            <Text style={styles.webPreviewText}>Preview</Text>
           </View>
-        )}
+        ) : null}
       </View>
 
       {isPreview && (
@@ -209,121 +234,54 @@ export default function AdminHomeScreen() {
         </View>
       )}
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.statsScroller} contentContainerStyle={styles.grid}>
+      <View style={styles.webStatsGrid}>
         {stats.map((item) => (
-          <View key={item.label} style={styles.statCard}>
-            <View style={[styles.statIconWrap, { backgroundColor: `${item.color}18` }]}>
-              <Ionicons name={item.icon} size={22} color={item.color} />
+          <View key={item.label} style={styles.webStatCard}>
+            <View style={[styles.webStatIcon, { backgroundColor: `${item.color}1D` }]}>
+              <Ionicons name={item.icon} size={23} color={item.color} />
             </View>
-            <View style={styles.statTextWrap}>
-              <Text style={styles.statValue}>{item.value}</Text>
-              <Text style={styles.statLabel}>{item.label}</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.webStatValue}>{item.value}</Text>
+              <Text style={styles.webStatLabel}>{item.label}</Text>
             </View>
           </View>
         ))}
-      </ScrollView>
+      </View>
 
-      <View style={styles.statusCard}>
-        <View style={styles.cardHeaderRow}>
-          <Text style={styles.cardTitle}>Consultation Status</Text>
-          <Ionicons name="analytics-outline" size={18} color={RoleColors.admin.accent} />
-        </View>
-        <View style={styles.statusGrid}>
+      <View style={styles.webStatusPanel}>
           {statusStats.map((item) => (
-            <View key={item.label} style={styles.statusItem}>
-              <View style={[styles.statusDot, { backgroundColor: item.color }]} />
-              <Text style={styles.statusValue}>{item.value}</Text>
-              <Text style={styles.statusLabel}>{item.label}</Text>
+            <View key={item.label} style={styles.webStatusItem}>
+              <Text style={[styles.webStatusValue, { color: item.color }]}>{item.value}</Text>
+              <Text style={styles.webStatusLabel}>{item.label}</Text>
             </View>
           ))}
-        </View>
       </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.extraScroller} contentContainerStyle={styles.extraRow}>
+      <View style={styles.webMiniGrid}>
         {extraStats.map((item) => (
-          <View key={item.label} style={styles.extraCard}>
-            <Ionicons name={item.icon} size={18} color={RoleColors.admin.accent} />
-            <Text style={styles.extraValue} numberOfLines={1}>{item.value}</Text>
-            <Text style={styles.extraLabel} numberOfLines={2}>{item.label}</Text>
+          <View key={item.label} style={styles.webMiniCard}>
+            <View style={styles.webMiniIcon}>
+              <Ionicons name={item.icon} size={19} color={RoleColors.admin.shell} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.webMiniValue} numberOfLines={1}>{item.value}</Text>
+              <Text style={styles.webMiniLabel} numberOfLines={2}>{item.label}</Text>
+            </View>
           </View>
         ))}
-      </ScrollView>
-
-      <Text style={styles.sectionTitle}>Quick Actions</Text>
-      <View style={styles.quickRow}>
-        <QuickButton icon="people-outline" label="Users" onPress={() => router.push('/(admin)/users' as any)} />
-        <QuickButton icon="settings-outline" label="System" onPress={() => router.push('/(admin)/system' as any)} />
-        <QuickButton icon="refresh-outline" label="Refresh" onPress={onRefresh} />
-      </View>
-
-      <View style={styles.moderationCard}>
-        <View style={styles.moderationHeader}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.moderationEyebrow}>MODERATION</Text>
-            <Text style={styles.moderationTitle}>Review queue</Text>
-            <Text style={styles.moderationDesc}>
-              Keep the platform healthy by checking flags, pending items, and system issues first.
-            </Text>
-          </View>
-          <View style={styles.moderationBadge}>
-            <Ionicons name="shield-checkmark-outline" size={16} color="#fff" />
-          </View>
-        </View>
-        <View style={styles.moderationStatsRow}>
-          {moderationStats.map((item) => (
-            <View key={item.label} style={styles.moderationStat}>
-              <View style={[styles.moderationDot, { backgroundColor: item.color }]} />
-              <Text style={styles.moderationValue}>{item.value}</Text>
-              <Text style={styles.moderationLabel}>{item.label}</Text>
-            </View>
-          ))}
-        </View>
-        <View style={styles.moderationActions}>
-          <TouchableOpacity style={styles.moderationPrimaryBtn} onPress={() => router.push('/(admin)/users' as any)}>
-            <Text style={styles.moderationPrimaryText}>Open users</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.moderationGhostBtn} onPress={() => router.push('/(admin)/system' as any)}>
-            <Text style={styles.moderationGhostText}>System tools</Text>
-          </TouchableOpacity>
-        </View>
       </View>
 
       <View style={styles.twoPanelStack}>
-        <AdminListCard
+        <WebConsultationCard
           title="Recent Consultations"
-          icon="calendar-outline"
-          empty="No recent consultations."
-          items={recentConsultations.map((item: any) => ({
-            id: String(item?.id ?? item?.code ?? Math.random()),
-            title: item?.code || `${item?.client?.name ?? 'Client'} / ${item?.lawyer?.name ?? 'Lawyer'}`,
-            meta: String(item?.status ?? 'Consultation').toUpperCase(),
-          }))}
+          onViewAll={() => router.push('/(admin)/consultations' as any)}
+          items={recentConsultations}
         />
-        <AdminListCard
+        <WebUsersCard
           title="Recent Users"
-          icon="person-add-outline"
-          empty="No recent users."
-          items={recentUsers.map((item: any) => ({
-            id: String(item?.id ?? item?.email ?? Math.random()),
-            title: item?.name || item?.email || 'User',
-            meta: String(item?.role ?? 'user').replace('_', ' ').toUpperCase(),
-          }))}
+          onViewAll={() => router.push('/(admin)/all-users' as any)}
+          items={recentUsers}
         />
-      </View>
-
-      <View style={styles.infoCard}>
-        <Text style={styles.infoTitle}>Admin Notes</Text>
-        <Text style={styles.infoLine}>Pending consultations: {dashboard?.summary?.pending_consultations ?? 0}</Text>
-        <Text style={styles.infoLine}>Pending firm applications: {dashboard?.summary?.pending_firm_applications ?? 0}</Text>
-        <Text style={styles.infoLine}>Payments today: {formatPhp(Number(dashboard?.summary?.payments_today ?? 0))}</Text>
-        <View style={styles.infoActions}>
-          <TouchableOpacity style={styles.ghostBtn} onPress={() => router.push('/privacy-policy')}>
-            <Text style={styles.ghostBtnText}>Privacy Policy</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.ghostBtn} onPress={() => router.push('/terms')}>
-            <Text style={styles.ghostBtnText}>Terms</Text>
-          </TouchableOpacity>
-        </View>
       </View>
 
       <TouchableOpacity
@@ -381,6 +339,99 @@ export default function AdminHomeScreen() {
   );
 }
 
+function AdminNavChip({ active, icon, label, onPress }: { active?: boolean; icon: any; label: string; onPress: () => void }) {
+  return (
+    <TouchableOpacity style={[styles.webNavChip, active && styles.webNavChipActive]} onPress={onPress} activeOpacity={0.85}>
+      <Ionicons name={icon} size={15} color={active ? '#FFFFFF' : '#C2C8D6'} />
+      <Text style={[styles.webNavChipText, active && styles.webNavChipTextActive]}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+function consultationStatusTone(statusRaw: unknown) {
+  const status = String(statusRaw ?? '').toLowerCase();
+  if (status.includes('completed')) return { bg: '#D1FAE5', text: '#047857', label: 'Completed' };
+  if (status.includes('cancel')) return { bg: '#FEE2E2', text: '#B91C1C', label: 'Cancelled' };
+  if (status.includes('upcoming')) return { bg: '#DBEAFE', text: '#1D4ED8', label: 'Upcoming' };
+  if (status.includes('pending')) return { bg: '#FEF3C7', text: '#B45309', label: 'Pending' };
+  return { bg: '#EDE9FE', text: RoleColors.admin.accent, label: String(statusRaw || 'Status') };
+}
+
+function WebPanelHeader({ title, icon, onViewAll }: { title: string; icon: any; onViewAll: () => void }) {
+  return (
+    <View style={styles.webPanelHeader}>
+      <View style={styles.webPanelTitleRow}>
+        <Ionicons name={icon} size={18} color={RoleColors.admin.accent} />
+        <Text style={styles.webPanelTitle}>{title}</Text>
+      </View>
+      <TouchableOpacity onPress={onViewAll}>
+        <Text style={styles.webPanelAction}>View all {'->'}</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+function WebConsultationCard({ title, items, onViewAll }: { title: string; items: any[]; onViewAll: () => void }) {
+  return (
+    <View style={styles.webPanelCard}>
+      <WebPanelHeader title={title} icon="calendar" onViewAll={onViewAll} />
+      {items.length === 0 ? (
+        <Text style={styles.webEmptyText}>No recent consultations.</Text>
+      ) : (
+        items.map((item: any, index: number) => {
+          const tone = consultationStatusTone(item?.status);
+          const code = item?.code ?? item?.consultation_code ?? item?.consult_code ?? `LC-${String(item?.id ?? index).padStart(6, '0')}`;
+          const client = item?.client?.name ?? item?.client_name ?? 'Client';
+          const lawyer = item?.lawyer?.name ?? item?.lawyer_name ?? 'Lawyer';
+          return (
+            <View key={String(item?.id ?? code ?? index)} style={styles.webConsultRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.webConsultCode} numberOfLines={1}>{code}</Text>
+                <Text style={styles.webConsultClient} numberOfLines={1}>{client}</Text>
+                <Text style={styles.webConsultLawyer} numberOfLines={1}>{lawyer}</Text>
+              </View>
+              <View style={[styles.webStatusBadge, { backgroundColor: tone.bg }]}>
+                <Text style={[styles.webStatusBadgeText, { color: tone.text }]}>{tone.label}</Text>
+              </View>
+            </View>
+          );
+        })
+      )}
+    </View>
+  );
+}
+
+function WebUsersCard({ title, items, onViewAll }: { title: string; items: any[]; onViewAll: () => void }) {
+  return (
+    <View style={styles.webPanelCard}>
+      <WebPanelHeader title={title} icon="person-add" onViewAll={onViewAll} />
+      {items.length === 0 ? (
+        <Text style={styles.webEmptyText}>No recent users.</Text>
+      ) : (
+        items.map((item: any, index: number) => {
+          const name = item?.name ?? item?.email ?? 'User';
+          const email = item?.email ?? 'No email';
+          const role = String(item?.role ?? 'client').replace('_', ' ');
+          return (
+            <View key={String(item?.id ?? email ?? index)} style={styles.webUserRow}>
+              <View style={styles.webUserAvatar}>
+                <Text style={styles.webUserAvatarText}>{String(name).charAt(0).toUpperCase()}</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.webUserName} numberOfLines={1}>{name}</Text>
+                <Text style={styles.webUserEmail} numberOfLines={1}>{email}</Text>
+              </View>
+              <View style={styles.webRolePill}>
+                <Text style={styles.webRoleText}>{role}</Text>
+              </View>
+            </View>
+          );
+        })
+      )}
+    </View>
+  );
+}
+
 function QuickButton({ icon, label, onPress }: { icon: any; label: string; onPress: () => void }) {
   return (
     <TouchableOpacity style={styles.quickBtn} onPress={onPress}>
@@ -430,7 +481,199 @@ function AdminListCard({
 const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: RoleColors.admin.background },
   container: { flex: 1, backgroundColor: RoleColors.admin.background },
-  content: { padding: 16, paddingBottom: 124 },
+  content: { padding: 16, paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) + 16 : 16, paddingBottom: 124 },
+  webAdminShell: {
+    backgroundColor: RoleColors.admin.shell,
+    borderRadius: 20,
+    padding: 16,
+    marginBottom: 12,
+  },
+  webBrandRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  webBrandIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: RoleColors.admin.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  webBrandTitle: { color: '#FFFFFF', fontSize: 20, fontWeight: '900' },
+  webBrandSub: { color: '#98A2B3', fontSize: 12, fontWeight: '700', marginTop: 2, letterSpacing: 0.6 },
+  webAdminBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: RoleColors.admin.accent,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  webAdminBadgeText: { color: '#FFFFFF', fontWeight: '900', fontSize: 12 },
+  webAdminCard: {
+    marginTop: 18,
+    backgroundColor: '#33215F',
+    borderWidth: 1,
+    borderColor: '#6D36D8',
+    borderRadius: 12,
+    padding: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  webAdminAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: RoleColors.admin.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  webAdminAvatarText: { color: '#FFFFFF', fontWeight: '900', fontSize: 16 },
+  webAdminName: { color: '#FFFFFF', fontWeight: '900', fontSize: 15 },
+  webAdminRole: { color: '#B8B7C9', fontWeight: '700', fontSize: 12, marginTop: 2 },
+  webNavScroll: { flexGrow: 0, marginHorizontal: -16, marginBottom: 14 },
+  webNavRow: { paddingHorizontal: 16, gap: 8 },
+  webNavChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    backgroundColor: RoleColors.admin.shell,
+    borderRadius: 999,
+    paddingHorizontal: 13,
+    paddingVertical: 10,
+  },
+  webNavChipActive: { backgroundColor: '#33215F', borderWidth: 1, borderColor: RoleColors.admin.accent },
+  webNavChipText: { color: '#C2C8D6', fontSize: 12, fontWeight: '800' },
+  webNavChipTextActive: { color: '#FFFFFF' },
+  webPageHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  webPageTitle: { color: '#1E2030', fontSize: 22, fontWeight: '900' },
+  webPageDate: { color: '#8A94A6', fontSize: 13, fontWeight: '600', marginTop: 4 },
+  webPreviewPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    backgroundColor: '#F5F0FF',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  webPreviewText: { color: RoleColors.admin.accent, fontSize: 11, fontWeight: '900' },
+  webStatsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 12 },
+  webStatCard: {
+    width: '48%',
+    minHeight: 116,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E8EDF5',
+    padding: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    shadowColor: '#102042',
+    shadowOpacity: 0.07,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 3,
+  },
+  webStatIcon: { width: 50, height: 50, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  webStatValue: { color: RoleColors.admin.shell, fontSize: 27, fontWeight: '900' },
+  webStatLabel: { color: '#566174', fontSize: 12, fontWeight: '800', marginTop: 3, lineHeight: 16 },
+  webStatusPanel: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E8EDF5',
+    flexDirection: 'row',
+    marginBottom: 12,
+    overflow: 'hidden',
+  },
+  webStatusItem: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 18,
+    borderRightWidth: 1,
+    borderRightColor: '#EEF2F7',
+  },
+  webStatusValue: { fontSize: 22, fontWeight: '900' },
+  webStatusLabel: { color: '#566174', fontSize: 12, fontWeight: '800', marginTop: 6 },
+  webMiniGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 12 },
+  webMiniCard: {
+    width: '48%',
+    minHeight: 94,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E8EDF5',
+    padding: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  webMiniIcon: { width: 42, height: 42, borderRadius: 14, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' },
+  webMiniValue: { color: RoleColors.admin.shell, fontSize: 20, fontWeight: '900' },
+  webMiniLabel: { color: '#566174', fontSize: 12, fontWeight: '800', marginTop: 2 },
+  webPanelCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E8EDF5',
+    overflow: 'hidden',
+  },
+  webPanelHeader: {
+    minHeight: 56,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderBottomWidth: 1,
+    borderBottomColor: '#EEF2F7',
+  },
+  webPanelTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  webPanelTitle: { color: RoleColors.admin.shell, fontSize: 16, fontWeight: '900' },
+  webPanelAction: { color: RoleColors.admin.accent, fontSize: 12, fontWeight: '800' },
+  webEmptyText: { color: Colors.textMuted, fontSize: 13, fontWeight: '700', padding: 14 },
+  webConsultRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+    gap: 10,
+  },
+  webConsultCode: { color: RoleColors.admin.shell, fontSize: 13, fontWeight: '900' },
+  webConsultClient: { color: '#111827', fontSize: 14, fontWeight: '800', marginTop: 4 },
+  webConsultLawyer: { color: '#667085', fontSize: 12, fontWeight: '700', marginTop: 2 },
+  webStatusBadge: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 },
+  webStatusBadgeText: { fontSize: 12, fontWeight: '900' },
+  webUserRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  webUserAvatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#EDE9FE',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  webUserAvatarText: { color: RoleColors.admin.accent, fontSize: 14, fontWeight: '900' },
+  webUserName: { color: RoleColors.admin.shell, fontSize: 14, fontWeight: '900' },
+  webUserEmail: { color: '#8A94A6', fontSize: 12, fontWeight: '600', marginTop: 2 },
+  webRolePill: { borderRadius: 999, backgroundColor: '#F1EAFE', paddingHorizontal: 10, paddingVertical: 6 },
+  webRoleText: { color: RoleColors.admin.accent, fontSize: 11, fontWeight: '900', textTransform: 'capitalize' },
   headerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 14 },
   avatar: {
     width: 54,

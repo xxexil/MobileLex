@@ -22,6 +22,8 @@ import { formatPhp } from '@/constants/currency';
 import AnimatedBorderCard from '@/components/AnimatedBorderCard';
 import BrandLogo from '@/components/BrandLogo';
 import LawyerBlockedDatesCard from '@/components/LawyerBlockedDatesCard';
+import DashboardPopupBanner from '@/components/DashboardPopupBanner';
+import ConfirmActionModal from '@/components/ConfirmActionModal';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   createReverbEcho,
@@ -143,6 +145,7 @@ export default function LawyerDashboard() {
   const [consultChartWidth, setConsultChartWidth] = useState(0);
   const [notifCount, setNotifCount] = useState(0);
   const [liveAlert, setLiveAlert] = useState<{ message: string; type: 'message' | 'consultation' } | null>(null);
+  const [declineTarget, setDeclineTarget] = useState<number | null>(null);
   const liveAlertTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -340,22 +343,20 @@ export default function LawyerDashboard() {
     }
   }
 
-  async function handleDecline(id: number) {
-    Alert.alert('Decline?', 'This will cancel the consultation and refund the client.', [
-      { text: 'No', style: 'cancel' },
-      {
-        text: 'Decline',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await lawyerApi.declineConsultation(id);
-            load();
-          } catch (err: any) {
-            Alert.alert('Error', err?.response?.data?.message || 'Failed to decline.');
-          }
-        },
-      },
-    ]);
+  function handleDecline(id: number) {
+    setDeclineTarget(id);
+  }
+
+  async function confirmDecline() {
+    if (!declineTarget) return;
+    const id = declineTarget;
+    setDeclineTarget(null);
+    try {
+      await lawyerApi.declineConsultation(id);
+      load();
+    } catch (err: any) {
+      Alert.alert('Error', err?.response?.data?.message || 'Failed to decline.');
+    }
   }
 
   const openAvailability = useCallback((status?: string) => {
@@ -375,6 +376,12 @@ export default function LawyerDashboard() {
   const pending = data?.stats?.pending ?? 0;
   const clients = data?.stats?.total_clients ?? 0;
   const totalEarned = data?.total_earned ?? 0;
+  const lawyerProfileNeedsSetup = !(
+    data?.profile?.is_certified
+    ?? data?.is_certified
+    ?? data?.lawyer_profile?.is_certified
+    ?? false
+  );
   const workModeValue = String(data?.availability_status ?? data?.current_status ?? data?.status ?? 'active').toLowerCase();
   const workMode = workModeValue === 'busy' || workModeValue === 'offline' ? workModeValue : 'active';
   const workModeLabel = workMode === 'busy' ? 'Busy right now' : workMode === 'offline' ? 'Offline' : 'Active now';
@@ -481,6 +488,26 @@ export default function LawyerDashboard() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
+      <ConfirmActionModal
+        visible={declineTarget !== null}
+        title="Decline consultation"
+        message="This will cancel the consultation and start the client's refund flow."
+        confirmLabel="Decline"
+        cancelLabel="Keep"
+        icon="close-circle-outline"
+        tone="danger"
+        onCancel={() => setDeclineTarget(null)}
+        onConfirm={confirmDecline}
+      />
+      <DashboardPopupBanner
+      role="lawyer"
+      storageKey={`lawyer-dashboard-popup-${user?.id ?? 'guest'}`}
+      visible={lawyerProfileNeedsSetup}
+      title="Complete your profile to get more bookings"
+      message="Add your specialty, hourly rate, availability, and verification documents so clients can trust your profile."
+      primaryLabel="Update Profile"
+      onPrimaryPress={() => router.push('/(lawyer)/settings' as any)}
+    />
     <ScrollView
       style={{ flex: 1 }}
       contentContainerStyle={styles.scrollContent}

@@ -15,6 +15,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Colors } from '@/constants/theme';
 import { formatPhp } from '@/constants/currency';
 import AnimatedBorderCard from '@/components/AnimatedBorderCard';
+import FeedbackModal from '@/components/FeedbackModal';
 
 const paymentMethods = [
   { key: 'card', label: 'Credit or Debit Card', icon: 'card-outline' },
@@ -40,6 +41,12 @@ export default function PaymentScreen() {
   const [selectedMethod, setSelectedMethod] = useState<(typeof paymentMethods)[number]['key']>('card');
   const [cardNumber, setCardNumber] = useState('');
   const [processing, setProcessing] = useState(false);
+  const [successVisible, setSuccessVisible] = useState(false);
+
+  function finishSuccess() {
+    setSuccessVisible(false);
+    router.replace('/(client)/consultations');
+  }
 
   async function handlePay() {
     if (selectedMethod === 'card' && cardNumber.trim().length < 12) {
@@ -50,12 +57,7 @@ export default function PaymentScreen() {
     setProcessing(true);
     setTimeout(() => {
       setProcessing(false);
-      Alert.alert('Payment Successful', 'Your booking has been confirmed.', [
-        {
-          text: 'Go to Consultations',
-          onPress: () => router.replace('/(client)/consultations'),
-        },
-      ]);
+      setSuccessVisible(true);
     }, 1400);
   }
 
@@ -117,6 +119,15 @@ export default function PaymentScreen() {
           {processing ? <ActivityIndicator color="#fff" /> : <Text style={styles.payBtnText}>Pay and Confirm</Text>}
         </TouchableOpacity>
       </ScrollView>
+      <FeedbackModal
+        visible={successVisible}
+        title="Payment confirmed"
+        message="Your booking has been confirmed. You can review the consultation details anytime."
+        tone="success"
+        primaryLabel="Go to consultations"
+        onPrimary={finishSuccess}
+        onClose={finishSuccess}
+      />
     </SafeAreaView>
   );
 }

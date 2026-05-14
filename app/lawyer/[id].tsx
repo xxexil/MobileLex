@@ -98,6 +98,27 @@ function buildTimeValue(hour12: number, minute: number, meridiem: 'AM' | 'PM') {
   return `${pad(hour24)}:${pad(minute)}`;
 }
 
+function normalizeTimeValue(value: string) {
+  const [hourRaw, minuteRaw] = String(value || '').split(':');
+  const hour = Number(hourRaw);
+  const minute = Number(minuteRaw);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return '';
+  return `${pad(Math.max(0, Math.min(23, hour)))}:${pad(Math.max(0, Math.min(59, minute)))}`;
+}
+
+function hasSlotTime(slots: AvailabilitySlot[], timeKey: string) {
+  const normalized = normalizeTimeValue(timeKey);
+  return Boolean(normalized) && slots.some((slot) => normalizeTimeValue(slot.time) === normalized);
+}
+
+function firstSlotTime(slots: AvailabilitySlot[]) {
+  for (const slot of slots) {
+    const normalized = normalizeTimeValue(slot.time);
+    if (normalized) return normalized;
+  }
+  return '';
+}
+
 function getTimeParts(timeKey: string) {
   const [hourRaw, minuteRaw] = timeKey.split(':');
   const hour24 = Number(hourRaw);
@@ -264,19 +285,13 @@ function extractCheckoutUrl(source: any): string | undefined {
   return undefined;
 }
 
-function buildFallbackSlots(dateKey: string, durationMinutes: number): AvailabilitySlot[] {
-  const date = new Date(`${dateKey}T00:00:00`);
-  const day = date.getDay();
-  if (day === 0 || day === 6) return [];
-
+function buildFallbackSlots(): AvailabilitySlot[] {
   const slots: AvailabilitySlot[] = [];
   const startHour = 9;
-  const latestStartMinutes = (17 * 60) - durationMinutes;
+  const endHour = 17;
 
-  for (let total = startHour * 60; total <= latestStartMinutes; total += 30) {
-    const hours = Math.floor(total / 60);
-    const minutes = total % 60;
-    const time = `${pad(hours)}:${pad(minutes)}`;
+  for (let hour = startHour; hour <= endHour; hour += 1) {
+    const time = `${pad(hour)}:00`;
     const label = new Date(`2000-01-01T${time}:00`).toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' });
     slots.push({ time, label });
   }
@@ -284,7 +299,7 @@ function buildFallbackSlots(dateKey: string, durationMinutes: number): Availabil
   return slots;
 }
 
-function buildFallbackAvailability(month: Date, requestedDate: string, durationMinutes: number): LawyerAvailability {
+function buildFallbackAvailability(month: Date, requestedDate: string): LawyerAvailability {
   const monthStart = new Date(month.getFullYear(), month.getMonth(), 1);
   const monthEnd = new Date(month.getFullYear(), month.getMonth() + 1, 0);
   const todayKey = formatDateValue(new Date());
@@ -294,8 +309,7 @@ function buildFallbackAvailability(month: Date, requestedDate: string, durationM
   for (let day = new Date(monthStart); day <= monthEnd; day.setDate(day.getDate() + 1)) {
     const dateKey = formatDateValue(day);
     const isPast = dateKey < todayKey;
-    const isWeekend = day.getDay() === 0 || day.getDay() === 6;
-    if (!isPast && !isWeekend) {
+    if (!isPast) {
       availableDates.push(dateKey);
     } else {
       unavailableDates.push(dateKey);
@@ -312,7 +326,7 @@ function buildFallbackAvailability(month: Date, requestedDate: string, durationM
     blocked_dates: [],
     unavailable_dates: unavailableDates,
     available_dates: availableDates,
-    slots: safeSelected ? buildFallbackSlots(safeSelected, durationMinutes) : [],
+    slots: safeSelected ? buildFallbackSlots() : [],
   };
 }
 
@@ -459,9 +473,9 @@ export default function LawyerDetailScreen() {
           setBookDate(nextAvailability.selected_date);
         }
 
-        const nextTime = nextAvailability.slots.some((slot) => slot.time === bookTime)
+        const nextTime = hasSlotTime(nextAvailability.slots, bookTime)
           ? bookTime
-          : (nextAvailability.slots[0]?.time ?? '');
+          : firstSlotTime(nextAvailability.slots);
 
         if (nextTime !== bookTime) {
           setBookTime(nextTime);
@@ -470,7 +484,7 @@ export default function LawyerDetailScreen() {
         if (!active) return;
         if (isMissingAvailabilityRoute(err)) {
           const fallbackDate = bookDate || formatDateValue(new Date());
-          const fallback = buildFallbackAvailability(calendarMonth, fallbackDate, duration);
+          const fallback = buildFallbackAvailability(calendarMonth, fallbackDate);
           setAvailability(fallback);
           setAvailabilityError('');
 
@@ -478,9 +492,9 @@ export default function LawyerDetailScreen() {
             setBookDate(fallback.selected_date);
           }
 
-          const nextTime = fallback.slots.some((slot) => slot.time === bookTime)
+          const nextTime = hasSlotTime(fallback.slots, bookTime)
             ? bookTime
-            : (fallback.slots[0]?.time ?? '');
+            : firstSlotTime(fallback.slots);
           if (nextTime !== bookTime) {
             setBookTime(nextTime);
           }
@@ -525,20 +539,22 @@ export default function LawyerDetailScreen() {
   const currentNow = new Date(nowTick);
   const isTodaySelected = bookDate === todayKey;
   const filteredSlots = (availability?.slots ?? []).filter((slot) => {
+    const slotTime = normalizeTimeValue(slot.time);
+    if (!slotTime) return false;
     if (!isTodaySelected) return true;
-    const slotDate = new Date(`${bookDate}T${slot.time}:00`);
+    const slotDate = new Date(`${bookDate}T${slotTime}:00`);
     return slotDate.getTime() > currentNow.getTime();
   });
   const groupedSlots = {
-    morning: filteredSlots.filter((slot) => Number(slot.time.split(':')[0]) < 12),
-    afternoon: filteredSlots.filter((slot) => Number(slot.time.split(':')[0]) >= 12),
+    morning: filteredSlots.filter((slot) => Number(normalizeTimeValue(slot.time).split(':')[0]) < 12),
+    afternoon: filteredSlots.filter((slot) => Number(normalizeTimeValue(slot.time).split(':')[0]) >= 12),
   };
 
   useEffect(() => {
     if (!bookingModal) return;
     if (bookTime) return;
 
-    setBookTime(filteredSlots[0]?.time ?? '');
+    setBookTime(firstSlotTime(filteredSlots));
   }, [bookingModal, bookTime, filteredSlots]);
 
   function openDateTimePicker() {
@@ -549,8 +565,10 @@ export default function LawyerDetailScreen() {
       setCalendarMonth(clampBookingMonth(new Date(`${fallbackDate}T00:00:00`)));
     }
     if (!bookTime) {
-      const nextTime = getNextBookableTime();
-      setBookTime(`${pad(nextTime.getHours())}:${pad(nextTime.getMinutes())}`);
+      const availableTime = firstSlotTime(filteredSlots);
+      if (availableTime) {
+        setBookTime(availableTime);
+      }
     }
     setDateTimePickerVisible(true);
   }
@@ -564,8 +582,28 @@ export default function LawyerDetailScreen() {
     );
     const pickedDateTime = new Date(`${bookDate || formatDateValue(getTodayStart())}T${nextTime}:00`);
     if (bookDate === formatDateValue(getTodayStart()) && pickedDateTime <= new Date()) {
-      const fallback = getNextBookableTime();
-      setBookTime(`${pad(fallback.getHours())}:${pad(fallback.getMinutes())}`);
+      const fallback = firstSlotTime(filteredSlots);
+      if (fallback) {
+        setBookTime(fallback);
+      }
+      return;
+    }
+    if (!hasSlotTime(filteredSlots, nextTime)) {
+      const matchingSlot = filteredSlots.find((slot) => {
+        const parts = getTimeParts(normalizeTimeValue(slot.time));
+        return (
+          (next.hour12 == null || parts.hour12 === next.hour12)
+          && (next.minute == null || parts.minute === next.minute)
+          && (next.meridiem == null || parts.meridiem === next.meridiem)
+        );
+      });
+      const matchingTime = matchingSlot ? normalizeTimeValue(matchingSlot.time) : '';
+      if (matchingTime) {
+        setBookTime(matchingTime);
+        return;
+      }
+
+      Alert.alert('Unavailable Time', 'Please choose one of the lawyer\'s available time slots.');
       return;
     }
     setBookTime(nextTime);
@@ -581,6 +619,10 @@ export default function LawyerDetailScreen() {
     const scheduled = new Date(`${bookDate}T${bookTime || '00:00'}:00`);
     if (!bookTime || Number.isNaN(scheduled.getTime()) || scheduled <= new Date()) {
       Alert.alert('Invalid Time', 'Please choose a future time for the consultation.');
+      return;
+    }
+    if (!hasSlotTime(filteredSlots, bookTime)) {
+      Alert.alert('Unavailable Time', 'Please choose one of the lawyer\'s available time slots.');
       return;
     }
 
@@ -695,6 +737,11 @@ export default function LawyerDetailScreen() {
     const scheduled = new Date(`${dateStr}T${timeStr}:00`);
     if (Number.isNaN(scheduled.getTime()) || scheduled <= new Date()) {
       Alert.alert('Invalid Date', 'Please choose a valid future date and time.');
+      return;
+    }
+
+    if (blockedDates.has(dateStr) || unavailableDates.has(dateStr) || !hasSlotTime(filteredSlots, timeStr)) {
+      Alert.alert('Schedule Unavailable', 'This lawyer is unavailable during the selected time. Please choose a different schedule.');
       return;
     }
 
@@ -990,17 +1037,24 @@ export default function LawyerDetailScreen() {
   const monthLabel = calendarMonth.toLocaleDateString('en-PH', { month: 'long', year: 'numeric' });
   const canGoPrevMonth = formatMonthValue(calendarMonth) > formatMonthValue(currentMonth);
   const selectedDateTimeLabel = formatBookingDateTime(bookDate, bookTime);
-  const selectedSlotLabel = filteredSlots.find((slot) => slot.time === bookTime)?.label || 'No time selected';
+  const selectedSlotLabel = filteredSlots.find((slot) => normalizeTimeValue(slot.time) === normalizeTimeValue(bookTime))?.label || 'No time selected';
   const selectedTimeParts = getTimeParts(bookTime || '09:00');
-  const isPickedTimePast = (next: Partial<{ hour12: number; minute: number; meridiem: 'AM' | 'PM' }>) => {
-    if (bookDate !== todayKey) return false;
-    const value = buildTimeValue(
-      next.hour12 ?? selectedTimeParts.hour12,
-      next.minute ?? selectedTimeParts.minute,
-      next.meridiem ?? selectedTimeParts.meridiem,
-    );
-    return new Date(`${bookDate}T${value}:00`) <= new Date();
+  const isPickedTimeUnavailable = (next: Partial<{ hour12: number; minute: number; meridiem: 'AM' | 'PM' }>) => {
+    if (!bookDate || !filteredSlots.length) return true;
+    return !filteredSlots.some((slot) => {
+      const slotTime = normalizeTimeValue(slot.time);
+      if (!slotTime) return false;
+      const slotDate = new Date(`${bookDate}T${slotTime}:00`);
+      if (slotDate <= new Date()) return false;
+      const parts = getTimeParts(slotTime);
+      return (
+        (next.hour12 == null || parts.hour12 === next.hour12)
+        && (next.minute == null || parts.minute === next.minute)
+        && (next.meridiem == null || parts.meridiem === next.meridiem)
+      );
+    });
   };
+  const isScheduleUnavailable = !bookDate || !bookTime || blockedDates.has(bookDate) || unavailableDates.has(bookDate) || !hasSlotTime(filteredSlots, bookTime);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Colors.background }}>
@@ -1272,12 +1326,12 @@ export default function LawyerDetailScreen() {
                       <View style={styles.slotGrid}>
                         {groupedSlots.morning.map((slot) => (
                           <TouchableOpacity
-                            key={slot.time}
-                            style={[styles.slotBtn, bookTime === slot.time && styles.slotBtnActive]}
-                            onPress={() => setBookTime(slot.time)}
+                            key={normalizeTimeValue(slot.time)}
+                            style={[styles.slotBtn, normalizeTimeValue(bookTime) === normalizeTimeValue(slot.time) && styles.slotBtnActive]}
+                            onPress={() => setBookTime(normalizeTimeValue(slot.time))}
                           >
-                            <Ionicons name="time-outline" size={14} color={bookTime === slot.time ? '#fff' : Colors.primary} />
-                            <Text style={[styles.slotBtnText, bookTime === slot.time && styles.slotBtnTextActive]}>{slot.label}</Text>
+                            <Ionicons name="time-outline" size={14} color={normalizeTimeValue(bookTime) === normalizeTimeValue(slot.time) ? '#fff' : Colors.primary} />
+                            <Text style={[styles.slotBtnText, normalizeTimeValue(bookTime) === normalizeTimeValue(slot.time) && styles.slotBtnTextActive]}>{slot.label}</Text>
                           </TouchableOpacity>
                         ))}
                       </View>
@@ -1290,12 +1344,12 @@ export default function LawyerDetailScreen() {
                       <View style={styles.slotGrid}>
                         {groupedSlots.afternoon.map((slot) => (
                           <TouchableOpacity
-                            key={slot.time}
-                            style={[styles.slotBtn, bookTime === slot.time && styles.slotBtnActive]}
-                            onPress={() => setBookTime(slot.time)}
+                            key={normalizeTimeValue(slot.time)}
+                            style={[styles.slotBtn, normalizeTimeValue(bookTime) === normalizeTimeValue(slot.time) && styles.slotBtnActive]}
+                            onPress={() => setBookTime(normalizeTimeValue(slot.time))}
                           >
-                            <Ionicons name="time-outline" size={14} color={bookTime === slot.time ? '#fff' : Colors.primary} />
-                            <Text style={[styles.slotBtnText, bookTime === slot.time && styles.slotBtnTextActive]}>{slot.label}</Text>
+                            <Ionicons name="time-outline" size={14} color={normalizeTimeValue(bookTime) === normalizeTimeValue(slot.time) ? '#fff' : Colors.primary} />
+                            <Text style={[styles.slotBtnText, normalizeTimeValue(bookTime) === normalizeTimeValue(slot.time) && styles.slotBtnTextActive]}>{slot.label}</Text>
                           </TouchableOpacity>
                         ))}
                       </View>
@@ -1403,7 +1457,11 @@ export default function LawyerDetailScreen() {
               </Text>
             </View>
 
-            <TouchableOpacity style={[styles.confirmBtn, booking && { opacity: 0.7 }]} onPress={handleBook} disabled={booking}>
+            <TouchableOpacity
+              style={[styles.confirmBtn, (booking || isScheduleUnavailable) && styles.confirmBtnDisabled]}
+              onPress={handleBook}
+              disabled={booking || isScheduleUnavailable}
+            >
               {booking ? <ActivityIndicator color="#fff" /> : <Text style={styles.confirmBtnText}>Confirm Booking</Text>}
             </TouchableOpacity>
           </ScrollView>
@@ -1476,7 +1534,7 @@ export default function LawyerDetailScreen() {
                           disabled={isDisabled}
                           onPress={() => {
                             setBookDate(dateKey);
-                            if (!bookTime) setBookTime('09:00');
+                            setBookTime('');
                           }}
                         >
                           <Text
@@ -1519,7 +1577,7 @@ export default function LawyerDetailScreen() {
                 <ScrollView style={styles.timeColumn} showsVerticalScrollIndicator={false}>
                   {TIME_PICKER_HOURS.map((hour) => (
                     (() => {
-                      const disabled = isPickedTimePast({ hour12: hour });
+                      const disabled = isPickedTimeUnavailable({ hour12: hour });
                       return (
                         <TouchableOpacity
                           key={`hour-${hour}`}
@@ -1545,7 +1603,7 @@ export default function LawyerDetailScreen() {
                 <ScrollView style={styles.timeColumn} showsVerticalScrollIndicator={false}>
                   {TIME_PICKER_MINUTES.map((minute) => (
                     (() => {
-                      const disabled = isPickedTimePast({ minute });
+                      const disabled = isPickedTimeUnavailable({ minute });
                       return (
                         <TouchableOpacity
                           key={`minute-${minute}`}
@@ -1571,7 +1629,7 @@ export default function LawyerDetailScreen() {
                 <View style={styles.meridiemColumn}>
                   {TIME_PICKER_MERIDIEMS.map((meridiem) => (
                     (() => {
-                      const disabled = isPickedTimePast({ meridiem });
+                      const disabled = isPickedTimeUnavailable({ meridiem });
                       return (
                         <TouchableOpacity
                           key={meridiem}
@@ -1980,5 +2038,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  confirmBtnDisabled: { opacity: 0.55 },
   confirmBtnText: { color: '#fff', fontWeight: '700', fontSize: 16 },
 });

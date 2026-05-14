@@ -14,9 +14,19 @@ import { Ionicons as IoniconsBase } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors } from '@/constants/theme';
 import { lawFirmApi } from '@/services/api';
+import ConfirmActionModal from '@/components/ConfirmActionModal';
 
 const Ionicons = IoniconsBase as any;
 const ROLE_FILTERS = ['all', 'lawyer', 'admin'] as const;
+
+type PendingAction = {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  icon: keyof typeof IoniconsBase.glyphMap;
+  tone: 'danger' | 'primary';
+  run: () => Promise<void>;
+} | null;
 
 function initials(name?: string | null) {
   if (!name) return '?';
@@ -32,6 +42,23 @@ function openLink(url: string, errorMessage: string) {
   });
 }
 
+function normalizeMember(item: any) {
+  return {
+    ...item,
+    role: item?.role ?? 'lawyer',
+    availability_status: item?.availability_status ?? item?.current_status,
+  };
+}
+
+function extractList(payload: any, keys: string[]) {
+  if (Array.isArray(payload)) return payload;
+  for (const key of keys) {
+    if (Array.isArray(payload?.[key])) return payload[key];
+  }
+  if (Array.isArray(payload?.data)) return payload.data;
+  return [];
+}
+
 export default function LawFirmTeam() {
   const [members, setMembers] = useState<any[]>([]);
   const [applications, setApplications] = useState<any[]>([]);
@@ -41,6 +68,7 @@ export default function LawFirmTeam() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [actioningId, setActioningId] = useState<number | null>(null);
+  const [pendingAction, setPendingAction] = useState<PendingAction>(null);
 
   const load = useCallback(async () => {
     const [teamRes, appsRes] = await Promise.allSettled([
@@ -52,7 +80,7 @@ export default function LawFirmTeam() {
 
     if (teamRes.status === 'fulfilled') {
       const payload = teamRes.value?.data;
-      setMembers(Array.isArray(payload?.data) ? payload.data : Array.isArray(payload) ? payload : []);
+      setMembers(extractList(payload, ['members', 'team_members', 'team']).map(normalizeMember));
     } else {
       setMembers([]);
       issues.push(String(teamRes.reason?.response?.data?.message ?? teamRes.reason?.message ?? 'Failed to load team data.'));
@@ -60,7 +88,7 @@ export default function LawFirmTeam() {
 
     if (appsRes.status === 'fulfilled') {
       const payload = appsRes.value?.data;
-      setApplications(Array.isArray(payload) ? payload : []);
+      setApplications(extractList(payload, ['applications', 'pending_applications']));
     } else {
       setApplications([]);
       issues.push(String(appsRes.reason?.response?.data?.message ?? appsRes.reason?.message ?? 'Failed to load applications.'));
@@ -90,46 +118,76 @@ export default function LawFirmTeam() {
   );
 
   const handleAccept = useCallback((appId: number, lawyerName: string) => {
-    Alert.alert('Accept Application', `Add ${lawyerName} to your team?`, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Accept',
-        onPress: async () => {
-          setActioningId(appId);
-          try {
-            await lawFirmApi.acceptApplication(appId);
-            setApplications((prev) => prev.filter((entry) => entry.id !== appId));
-            await load();
-          } catch (err: any) {
-            Alert.alert('Error', err?.response?.data?.message ?? 'Failed to accept application.');
-          } finally {
-            setActioningId(null);
-          }
-        },
+    setPendingAction({
+      title: 'Accept application',
+      message: `Add ${lawyerName} to your law firm team?`,
+      confirmLabel: 'Accept',
+      icon: 'person-add-outline',
+      tone: 'primary',
+      run: async () => {
+        setActioningId(appId);
+        try {
+          await lawFirmApi.acceptApplication(appId);
+          setApplications((prev) => prev.filter((entry) => entry.id !== appId));
+          await load();
+        } catch (err: any) {
+          Alert.alert('Error', err?.response?.data?.message ?? 'Failed to accept application.');
+        } finally {
+          setActioningId(null);
+        }
       },
-    ]);
+    });
   }, [load]);
 
   const handleReject = useCallback((appId: number, lawyerName: string) => {
-    Alert.alert('Reject Application', `Reject ${lawyerName}'s application?`, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Reject',
-        style: 'destructive',
-        onPress: async () => {
-          setActioningId(appId);
-          try {
-            await lawFirmApi.rejectApplication(appId);
-            setApplications((prev) => prev.filter((entry) => entry.id !== appId));
-          } catch (err: any) {
-            Alert.alert('Error', err?.response?.data?.message ?? 'Failed to reject application.');
-          } finally {
-            setActioningId(null);
-          }
-        },
+    setPendingAction({
+      title: 'Reject application',
+      message: `Reject ${lawyerName}'s application?`,
+      confirmLabel: 'Reject',
+      icon: 'close-circle-outline',
+      tone: 'danger',
+      run: async () => {
+        setActioningId(appId);
+        try {
+          await lawFirmApi.rejectApplication(appId);
+          setApplications((prev) => prev.filter((entry) => entry.id !== appId));
+        } catch (err: any) {
+          Alert.alert('Error', err?.response?.data?.message ?? 'Failed to reject application.');
+        } finally {
+          setActioningId(null);
+        }
       },
-    ]);
+    });
   }, []);
+
+  const handleRemoveMember = useCallback((memberId: number, memberName: string) => {
+    setPendingAction({
+      title: 'Remove lawyer',
+      message: `Remove ${memberName} from your law firm team?`,
+      confirmLabel: 'Remove',
+      icon: 'trash-outline',
+      tone: 'danger',
+      run: async () => {
+        setActioningId(memberId);
+        try {
+          await lawFirmApi.removeLawyer(memberId);
+          setMembers((prev) => prev.filter((entry) => Number(entry.id) !== Number(memberId)));
+          await load();
+        } catch (err: any) {
+          Alert.alert('Remove Failed', err?.response?.data?.message ?? 'Failed to remove this lawyer.');
+        } finally {
+          setActioningId(null);
+        }
+      },
+    });
+  }, [load]);
+
+  const runPendingAction = useCallback(async () => {
+    const action = pendingAction;
+    if (!action) return;
+    setPendingAction(null);
+    await action.run();
+  }, [pendingAction]);
 
   if (loading) {
     return <View style={styles.center}><ActivityIndicator size="large" color={Colors.primary} /></View>;
@@ -137,6 +195,16 @@ export default function LawFirmTeam() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
+      <ConfirmActionModal
+        visible={Boolean(pendingAction)}
+        title={pendingAction?.title ?? ''}
+        message={pendingAction?.message ?? ''}
+        confirmLabel={pendingAction?.confirmLabel}
+        icon={pendingAction?.icon}
+        tone={pendingAction?.tone}
+        onCancel={() => setPendingAction(null)}
+        onConfirm={runPendingAction}
+      />
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.content}
@@ -213,6 +281,9 @@ export default function LawFirmTeam() {
               </View>
             ) : filteredMembers.map((item, index) => {
               const isOnline = String(item?.availability_status ?? '').toLowerCase() === 'available';
+              const isActioning = actioningId === item?.id;
+              const joinedAt = item?.joined_at || item?.pivot?.created_at || item?.created_at;
+              const totalConsults = Number(item?.total_consultations ?? item?.consultations_count ?? item?.consultations ?? 0);
               return (
                 <View key={String(item?.id ?? index)} style={styles.memberCard}>
                   <View style={[styles.memberAccent, { backgroundColor: isOnline ? '#14532D' : '#CBD5E1' }]} />
@@ -255,6 +326,19 @@ export default function LawFirmTeam() {
                       <Text style={styles.detailText}>{item?.phone ?? 'No phone provided'}</Text>
                     </View>
 
+                    <View style={styles.memberStatsRow}>
+                      <View style={styles.memberStatPill}>
+                        <Text style={styles.memberStatValue}>{totalConsults}</Text>
+                        <Text style={styles.memberStatLabel}>Consultations</Text>
+                      </View>
+                      <View style={styles.memberStatPill}>
+                        <Text style={styles.memberStatValue}>
+                          {joinedAt ? new Date(joinedAt).toLocaleDateString('en-PH', { month: 'short', year: 'numeric' }) : 'N/A'}
+                        </Text>
+                        <Text style={styles.memberStatLabel}>Joined</Text>
+                      </View>
+                    </View>
+
                     <View style={styles.actionRow}>
                       <TouchableOpacity
                         style={[styles.secondaryBtn, !item?.email && styles.btnDisabled]}
@@ -273,6 +357,16 @@ export default function LawFirmTeam() {
                         <Text style={styles.primaryBtnText}>Call</Text>
                       </TouchableOpacity>
                     </View>
+                    {String(item?.role ?? '').toLowerCase() !== 'admin' ? (
+                      <TouchableOpacity
+                        style={[styles.removeBtn, isActioning && styles.btnDisabled]}
+                        disabled={isActioning}
+                        onPress={() => handleRemoveMember(Number(item.id), item?.name ?? 'this lawyer')}
+                      >
+                        {isActioning ? <ActivityIndicator size="small" color="#B91C1C" /> : <Ionicons name="person-remove-outline" size={15} color="#B91C1C" />}
+                        <Text style={styles.removeBtnText}>Remove from firm</Text>
+                      </TouchableOpacity>
+                    ) : null}
                   </View>
                 </View>
               );
@@ -462,6 +556,18 @@ const styles = StyleSheet.create({
   certifiedText: { color: '#166534', fontWeight: '800', fontSize: 13 },
   detailRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
   detailText: { color: '#6B7E93', fontSize: 14, flex: 1 },
+  memberStatsRow: { flexDirection: 'row', gap: 8, marginTop: 12 },
+  memberStatPill: {
+    flex: 1,
+    backgroundColor: '#F8FAFD',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E3EBF4',
+    paddingVertical: 9,
+    paddingHorizontal: 10,
+  },
+  memberStatValue: { color: '#17305B', fontSize: 14, fontWeight: '900' },
+  memberStatLabel: { color: '#6B7E93', fontSize: 11, fontWeight: '700', marginTop: 2 },
   actionRow: { flexDirection: 'row', gap: 10, marginTop: 16 },
   secondaryBtn: {
     flex: 1,
@@ -497,6 +603,19 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   applicationMessage: { color: '#6B7E93', marginTop: 12, lineHeight: 20, fontSize: 14 },
+  removeBtn: {
+    height: 40,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#F2B7BE',
+    backgroundColor: '#FFF5F5',
+    marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  removeBtnText: { color: '#B91C1C', fontWeight: '900', fontSize: 13 },
   rejectBtn: {
     flex: 1,
     height: 42,

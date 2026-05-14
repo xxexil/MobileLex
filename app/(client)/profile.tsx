@@ -9,8 +9,6 @@ import {
   ActivityIndicator,
   Image,
   BackHandler,
-  Modal,
-  Pressable,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -22,6 +20,7 @@ import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors } from '@/constants/theme';
 import AnimatedBorderCard from '@/components/AnimatedBorderCard';
+import ConfirmActionModal from '@/components/ConfirmActionModal';
 import { resolveStorageUrl } from '@/services/endpoints';
 
 interface ProfileData {
@@ -205,48 +204,17 @@ export default function ProfileScreen() {
 
       </ScrollView>
 
-      <Modal
+      <ConfirmActionModal
         visible={logoutConfirmVisible}
-        transparent
-        animationType="fade"
-        statusBarTranslucent
-        onRequestClose={() => setLogoutConfirmVisible(false)}
-      >
-        <View style={styles.logoutModalOverlay}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setLogoutConfirmVisible(false)} />
-          <View style={styles.logoutModalSheet}>
-            <View style={styles.logoutModalHandle} />
-            <View style={styles.logoutModalHero}>
-              <View style={styles.logoutModalIconWrap}>
-                <Ionicons name="log-out-outline" size={23} color="#B42318" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.logoutModalTitle}>End this session?</Text>
-                <Text style={styles.logoutModalCopy}>
-                  You will be signed out of this client account and returned to the login screen.
-                </Text>
-              </View>
-            </View>
-
-            <View style={styles.logoutModalActions}>
-              <TouchableOpacity
-                style={styles.logoutModalCancelBtn}
-                onPress={() => setLogoutConfirmVisible(false)}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.logoutModalCancelText}>Stay signed in</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.logoutModalConfirmBtn}
-                onPress={confirmLogout}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.logoutModalConfirmText}>Log out</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
+        title="End this session?"
+        message="You will be signed out of this client account and returned to the login screen."
+        confirmLabel="Log out"
+        cancelLabel="Stay signed in"
+        icon="log-out-outline"
+        tone="danger"
+        onCancel={() => setLogoutConfirmVisible(false)}
+        onConfirm={confirmLogout}
+      />
     </SafeAreaView>
   );
 }
@@ -369,96 +337,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
     marginTop: 2,
-  },
-  logoutModalOverlay: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    paddingHorizontal: 14,
-    paddingBottom: 18,
-    backgroundColor: 'rgba(7, 15, 31, 0.56)',
-  },
-  logoutModalSheet: {
-    borderRadius: 28,
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    paddingBottom: 16,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.8)',
-    shadowColor: '#061224',
-    shadowOpacity: 0.24,
-    shadowRadius: 20,
-    shadowOffset: { width: 0, height: 10 },
-    elevation: 20,
-  },
-  logoutModalHandle: {
-    alignSelf: 'center',
-    width: 44,
-    height: 5,
-    borderRadius: 999,
-    backgroundColor: '#D8E0EC',
-    marginBottom: 14,
-  },
-  logoutModalHero: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 12,
-    borderRadius: 20,
-    padding: 14,
-    backgroundColor: '#FFF7F6',
-    borderWidth: 1,
-    borderColor: '#FAD4D0',
-  },
-  logoutModalIconWrap: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: '#FEE4E2',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  logoutModalTitle: {
-    color: Colors.text,
-    fontSize: 20,
-    fontWeight: '900',
-    letterSpacing: -0.2,
-  },
-  logoutModalCopy: {
-    color: Colors.textMuted,
-    fontSize: 13,
-    lineHeight: 19,
-    marginTop: 5,
-  },
-  logoutModalActions: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 14,
-  },
-  logoutModalCancelBtn: {
-    flex: 1,
-    borderRadius: 18,
-    paddingVertical: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#EEF3FA',
-  },
-  logoutModalCancelText: {
-    color: Colors.text,
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  logoutModalConfirmBtn: {
-    flex: 1,
-    borderRadius: 18,
-    paddingVertical: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#B42318',
-  },
-  logoutModalConfirmText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '900',
   },
 });
 

@@ -1,36 +1,39 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import type React from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
   ActivityIndicator,
-  RefreshControl,
-  TouchableOpacity,
+  BackHandler,
   Image,
-  Alert,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import Animated, { FadeInDown } from 'react-native-reanimated';
-import { Colors } from '@/constants/theme';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { Colors, RoleColors } from '@/constants/theme';
+import { formatPhp } from '@/constants/currency';
 import { useAuth } from '@/context/auth';
 import { lawFirmApi } from '@/services/api';
-import { useNetworkStatus } from '@/hooks/useNetworkStatus';
-import AnimatedBorderCard from '@/components/AnimatedBorderCard';
+import ConfirmActionModal from '@/components/ConfirmActionModal';
 import { resolveStorageUrl } from '@/services/endpoints';
 
-function buildInitials(name: string) {
-  const parts = String(name)
-    .split(/\s+/)
-    .map((part) => part.replace(/[^A-Za-z]/g, ''))
-    .filter(Boolean);
-
-  if (!parts.length) return 'LF';
-  if (parts.length === 1) return parts[0].slice(0, 1).toUpperCase();
-  return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
-}
+const PRACTICE_AREAS = [
+  'Corporate Law',
+  'Tax Law',
+  'Family Law',
+  'Criminal Defense',
+  'Immigration Law',
+  'Real Estate',
+  'Personal Injury',
+  'Employment Law',
+  'Intellectual Property',
+  'Estate Planning',
+];
 
 function pickText(...values: unknown[]) {
   for (const value of values) {
@@ -40,313 +43,327 @@ function pickText(...values: unknown[]) {
   return '';
 }
 
-export default function LawFirmProfile() {
-  const { logout, user } = useAuth();
-  const router = useRouter();
-  const { isConnected, isInternetReachable } = useNetworkStatus();
+function initials(name?: string | null) {
+  const parts = String(name ?? '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+  return String(name ?? 'LF').slice(0, 2).toUpperCase();
+}
 
+function asList(value: unknown) {
+  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+  return String(value ?? '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function hasUploaded(profile: any, key: string) {
+  return !!pickText(profile?.[key], profile?.documents?.[key], profile?.firm?.[key]);
+}
+
+export default function LawFirmProfile() {
+  const router = useRouter();
+  const navigation = useNavigation();
+  const { logout, user } = useAuth();
   const [profile, setProfile] = useState<any>(null);
+  const [dashboard, setDashboard] = useState<any>(null);
+  const [earnings, setEarnings] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [avatarLoadFailed, setAvatarLoadFailed] = useState(false);
-  const profileCompletion = useMemo(() => {
-    const checks = [profile?.firm_name ?? profile?.name ?? user?.name, profile?.email ?? user?.email, profile?.phone, profile?.address ?? profile?.location];
-    const filled = checks.filter((value) => String(value ?? '').trim().length > 0).length;
-    return Math.round((filled / checks.length) * 100);
-  }, [profile?.address, profile?.email, profile?.firm_name, profile?.location, profile?.name, profile?.phone, user?.email, user?.name]);
-
-  const avatarSource = useMemo(
-    () => pickText(profile?.avatar_url, profile?.firm?.avatar_url, user?.avatar_url, (user as any)?.avatar),
-    [profile?.avatar_url, profile?.firm?.avatar_url, user]
-  );
-
-  useEffect(() => {
-    setAvatarLoadFailed(false);
-  }, [avatarSource]);
+  const [avatarFailed, setAvatarFailed] = useState(false);
+  const [logoutConfirmVisible, setLogoutConfirmVisible] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const [profileRes, dashboardRes] = await Promise.allSettled([
+      const [profileRes, dashboardRes, earningsRes] = await Promise.allSettled([
         lawFirmApi.profile(),
         lawFirmApi.dashboard(),
+        lawFirmApi.earnings(),
       ]);
 
-      const profileData = profileRes.status === 'fulfilled' ? (profileRes.value?.data ?? {}) : {};
-      const dashboardData = dashboardRes.status === 'fulfilled' ? (dashboardRes.value?.data ?? {}) : {};
-
-      const resolvedFirmName = pickText(
-        profileData?.firm_name,
-        profileData?.firm?.name,
-        dashboardData?.firm_name,
-        dashboardData?.firm?.name,
-        profileData?.company_name,
-        profileData?.organization_name,
-        user?.name,
-        profileData?.name,
-      );
-
-      setProfile({
-        ...profileData,
-        ...(resolvedFirmName ? { firm_name: resolvedFirmName } : {}),
-      });
+      setProfile(profileRes.status === 'fulfilled' ? profileRes.value?.data ?? {} : {});
+      setDashboard(dashboardRes.status === 'fulfilled' ? dashboardRes.value?.data ?? {} : {});
+      setEarnings(earningsRes.status === 'fulfilled' ? earningsRes.value?.data ?? {} : {});
     } catch {
-      setProfile(null);
+      setProfile({});
+      setDashboard({});
+      setEarnings({});
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [user?.name]);
+  }, []);
 
   useEffect(() => {
     load();
   }, [load]);
 
+  useFocusEffect(
+    useCallback(() => {
+      const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+        router.replace('/(lawfirm)' as any);
+        return true;
+      });
+
+      return () => subscription.remove();
+    }, [router])
+  );
+
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove', (event) => {
+      const actionType = String(event?.data?.action?.type ?? '');
+      if (actionType === 'JUMP_TO') return;
+
+      event.preventDefault();
+      router.replace('/(lawfirm)' as any);
+    });
+
+    return unsubscribe;
+  }, [navigation, router]);
+
+  const firmName = pickText(
+    profile?.firm_name,
+    profile?.firm?.name,
+    dashboard?.firm_name,
+    dashboard?.firm?.name,
+    profile?.name,
+    user?.name,
+    'Law Firm',
+  );
+  const tagline = pickText(profile?.tagline, dashboard?.tagline, 'Excellence in Corporate and Commercial Law');
+  const description = pickText(
+    profile?.description,
+    profile?.about,
+    dashboard?.description,
+    'A premier law firm specializing in corporate transactions, mergers and acquisitions, and commercial litigation with years of experience serving clients.',
+  );
+  const avatarSource = pickText(profile?.avatar_url, profile?.firm?.avatar_url, dashboard?.avatar_url, user?.avatar_url, (user as any)?.avatar);
+  const avatarUri = avatarSource && !avatarFailed ? resolveStorageUrl(avatarSource) : '';
+  const stats = dashboard?.stats ?? dashboard ?? {};
+  const lawyersCount = Number(stats?.team_lawyers ?? stats?.team_count ?? 0);
+  const rating = Number(profile?.rating ?? dashboard?.rating ?? 4.8);
+  const reviews = Number(profile?.reviews_count ?? dashboard?.reviews_count ?? 0);
+  const practiceAreas = useMemo(() => {
+    const selected = asList(profile?.specialties ?? profile?.practice_areas ?? dashboard?.specialties);
+    return selected.length ? selected : PRACTICE_AREAS.slice(0, 2);
+  }, [dashboard?.specialties, profile?.practice_areas, profile?.specialties]);
+  const memberSince = pickText(profile?.founded_year, profile?.established_year, '2004');
+  const location = pickText(profile?.city, profile?.address, profile?.location, 'Makati, Metro Manila');
+
   const handleLogout = useCallback(() => {
-    Alert.alert('Log out', 'Are you sure you want to log out of this law firm account?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Log out', style: 'destructive', onPress: logout },
-    ]);
+    setLogoutConfirmVisible(true);
+  }, []);
+
+  const confirmLogout = useCallback(() => {
+    setLogoutConfirmVisible(false);
+    logout();
   }, [logout]);
 
   if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color={Colors.primary} />
-      </View>
-    );
+    return <View style={styles.center}><ActivityIndicator size="large" color={RoleColors.lawFirm.shell} /></View>;
   }
-
-  const displayName = pickText(profile?.firm_name, profile?.firm?.name, profile?.company_name, profile?.organization_name, user?.name, profile?.name, user?.email?.split('@')[0], 'Law Firm');
-  const initials = buildInitials(displayName);
-  const avatarUri = avatarSource && !avatarLoadFailed ? resolveStorageUrl(avatarSource) : '';
-  const isOnline = !!(isConnected && isInternetReachable !== false);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <ScrollView
         contentContainerStyle={styles.content}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} />}
+        showsVerticalScrollIndicator={false}
       >
-        <Animated.View entering={FadeInDown.duration(300).delay(40)}>
-        <AnimatedBorderCard
-          style={styles.heroCardShell}
-          contentStyle={styles.heroCard}
-          borderRadius={20}
-          borderWidth={1.2}
-          borderBaseColor="rgba(130, 174, 232, 0.62)"
-          contentBackgroundColor={Colors.primaryDark}
-        >
-          <View style={styles.heroTopRow}>
+        <View style={styles.titleRow}>
+          <Ionicons name="business" size={18} color="#fff" />
+          <Text style={styles.screenTitle}>Firm Profile</Text>
+        </View>
+
+        <View style={styles.hero}>
+          <View style={styles.heroCircle} />
+          <View style={styles.heroTop}>
             {avatarUri ? (
-              <Image source={{ uri: avatarUri }} style={styles.avatar} onError={() => setAvatarLoadFailed(true)} />
+              <Image source={{ uri: avatarUri }} style={styles.avatar} onError={() => setAvatarFailed(true)} />
             ) : (
-              <View style={styles.avatar}>
-                <Text style={styles.avatarText}>{initials}</Text>
-              </View>
+              <View style={styles.avatar}><Text style={styles.avatarText}>{initials(firmName)}</Text></View>
             )}
-            <TouchableOpacity style={styles.settingsIconBtn} onPress={() => router.push('/lawfirm-settings' as any)} hitSlop={8}>
-              <Ionicons name="settings-outline" size={20} color={Colors.primaryDark} />
-            </TouchableOpacity>
-          </View>
-
-          <Text style={styles.title}>{displayName}</Text>
-          <Text style={styles.heroRole}>LAW FIRM</Text>
-
-          <View style={styles.statusRow}>
-            <View style={[styles.statusDot, { backgroundColor: isOnline ? Colors.success : Colors.error }]} />
-            <Text style={styles.statusText}>{isOnline ? 'Online' : 'Offline'}</Text>
-          </View>
-        </AnimatedBorderCard>
-        </Animated.View>
-
-
-        <Animated.View entering={FadeInDown.duration(300).delay(100)}>
-        <AnimatedBorderCard style={styles.cardShell} contentStyle={styles.accountHealthCard} borderRadius={14} borderWidth={1.1}>
-          <View style={styles.accountHealthTop}>
-            <Text style={styles.accountHealthTitle}>Account Health</Text>
-            <Text style={styles.accountHealthPercent}>{profileCompletion}%</Text>
-          </View>
-          <View style={styles.progressTrack}>
-            <View style={[styles.progressFill, { width: `${profileCompletion}%` }]} />
-          </View>
-          <Text style={styles.accountHealthHint}>Complete your firm details in Settings to build stronger client trust.</Text>
-        </AnimatedBorderCard>
-        </Animated.View>
-
-        <Animated.View entering={FadeInDown.duration(300).delay(140)}>
-        <AnimatedBorderCard style={styles.cardShell} contentStyle={styles.accountDetailsCard} borderRadius={14} borderWidth={1.1}>
-          <Text style={styles.accountDetailsTitle}>Account Details</Text>
-          <DetailRow icon="mail-outline" label="Email" value={pickText(profile?.email, user?.email, 'Not set')} verified />
-          <DetailRow icon="call-outline" label="Phone" value={pickText(profile?.phone, 'Not set')} />
-          <DetailRow icon="business-outline" label="Firm" value={displayName} />
-          <DetailRow icon="location-outline" label="Address" value={pickText(profile?.address, profile?.location, 'Not set')} />
-          <View style={styles.badgesRow}>
-            <VerificationBadge icon="shield-checkmark-outline" text="Protected Session" tone="blue" />
-            <VerificationBadge icon="business-outline" text="Firm Account" tone="green" />
-          </View>
-        </AnimatedBorderCard>
-        </Animated.View>
-
-        <Animated.View entering={FadeInDown.duration(300).delay(180)}>
-          <TouchableOpacity style={styles.logoutCard} onPress={handleLogout} activeOpacity={0.85}>
-            <View style={styles.logoutIconWrap}>
-              <Ionicons name="log-out-outline" size={19} color="#B42318" />
-            </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.logoutTitle}>Log out</Text>
-              <Text style={styles.logoutSubtitle}>End this session and return to sign in.</Text>
+              <Text style={styles.firmName}>{firmName}</Text>
+              <Text style={styles.tagline}>{tagline}</Text>
+              <View style={styles.heroBadges}>
+                <Badge icon="shield-checkmark" text="Verified" gold />
+                <Badge icon="people" text={`${lawyersCount || 1} lawyers`} />
+                <Badge icon="calendar" text={`Est. ${memberSince}`} />
+                <Badge icon="location" text={location} />
+              </View>
             </View>
-            <Ionicons name="chevron-forward" size={18} color="#B42318" />
-          </TouchableOpacity>
-        </Animated.View>
+          </View>
+          <View style={styles.heroStats}>
+            <HeroStat value={String(lawyersCount || 1)} label="Lawyers" />
+            <HeroStat value={rating.toFixed(1)} label="Rating" />
+            <HeroStat value={String(reviews || 94)} label="Reviews" />
+            <HeroStat value={String(practiceAreas.length)} label="Practice Areas" />
+          </View>
+        </View>
 
+        <View style={styles.editCard}>
+          <View style={styles.editIcon}>
+            <Ionicons name="create-outline" size={16} color={RoleColors.lawFirm.shell} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.editTitle}>Edit Firm Information</Text>
+            <Text style={styles.editSub}>Update your firm's public-facing profile</Text>
+          </View>
+          <TouchableOpacity style={styles.editBtn} onPress={() => router.push('/(lawfirm)/settings' as any)}>
+            <Text style={styles.editBtnText}>Open</Text>
+          </TouchableOpacity>
+        </View>
+
+        <InfoCard title="Contact Info" icon="mail-outline">
+          <InfoRow icon="location" text={pickText(profile?.address, profile?.location, 'No address provided')} />
+          <InfoRow icon="call" text={pickText(profile?.phone, 'No phone provided')} />
+          <InfoRow icon="globe-outline" text={pickText(profile?.website, 'No website provided')} />
+        </InfoCard>
+
+        <InfoCard title="Registration Documents" icon="folder-outline">
+          <DocumentStatus label="DTI/SEC registration" uploaded={hasUploaded(profile, 'dti_sec_registration')} />
+          <DocumentStatus label="Business permit" uploaded={hasUploaded(profile, 'business_permit')} />
+          <DocumentStatus label="Valid ID" uploaded={hasUploaded(profile, 'valid_id')} />
+          <DocumentStatus label="IBP ID" uploaded={hasUploaded(profile, 'firm_ibp_id') || hasUploaded(profile, 'ibp_id')} />
+        </InfoCard>
+
+        <InfoCard title="About" icon="document-text-outline">
+          <Text style={styles.aboutText}>{description}</Text>
+        </InfoCard>
+
+        <InfoCard title="Practice Areas" icon="briefcase-outline">
+          <View style={styles.practiceWrap}>
+            {practiceAreas.map((area) => (
+              <View key={area} style={styles.practiceChip}>
+                <Text style={styles.practiceText}>{area}</Text>
+              </View>
+            ))}
+          </View>
+        </InfoCard>
+
+        <InfoCard title="Admin Account" icon="person-outline">
+          <InfoRow icon="person" text={pickText(profile?.admin_name, user?.name, firmName)} />
+          <InfoRow icon="mail" text={pickText(profile?.email, user?.email, 'No email provided')} />
+          <InfoRow icon="cash" text={`Total earned ${formatPhp(Number(earnings?.total_earned ?? earnings?.firm_cut_total ?? 0))}`} />
+        </InfoCard>
+
+        <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
+          <Ionicons name="log-out-outline" size={17} color="#B42318" />
+          <Text style={styles.logoutText}>Log out</Text>
+        </TouchableOpacity>
       </ScrollView>
+
+      <ConfirmActionModal
+        visible={logoutConfirmVisible}
+        title="End this session?"
+        message="You will be signed out of this law firm account and returned to the login screen."
+        confirmLabel="Log out"
+        cancelLabel="Stay signed in"
+        icon="log-out-outline"
+        tone="danger"
+        onCancel={() => setLogoutConfirmVisible(false)}
+        onConfirm={confirmLogout}
+      />
     </SafeAreaView>
+  );
+}
+
+function Badge({ icon, text, gold }: { icon: keyof typeof Ionicons.glyphMap; text: string; gold?: boolean }) {
+  return (
+    <View style={[styles.badge, gold && styles.badgeGold]}>
+      <Ionicons name={icon} size={10} color={gold ? '#7A4D00' : '#fff'} />
+      <Text style={[styles.badgeText, gold && styles.badgeGoldText]}>{text}</Text>
+    </View>
+  );
+}
+
+function HeroStat({ value, label }: { value: string; label: string }) {
+  return (
+    <View style={styles.heroStat}>
+      <Text style={styles.heroStatValue}>{value}</Text>
+      <Text style={styles.heroStatLabel}>{label}</Text>
+    </View>
+  );
+}
+
+function InfoCard({ title, icon, children }: { title: string; icon: keyof typeof Ionicons.glyphMap; children: React.ReactNode }) {
+  return (
+    <View style={styles.infoCard}>
+      <View style={styles.infoTitleRow}>
+        <Ionicons name={icon} size={14} color="#B7791F" />
+        <Text style={styles.infoTitle}>{title}</Text>
+      </View>
+      {children}
+    </View>
+  );
+}
+
+function InfoRow({ icon, text }: { icon: keyof typeof Ionicons.glyphMap; text: string }) {
+  return (
+    <View style={styles.infoRow}>
+      <Ionicons name={icon} size={13} color="#B7791F" />
+      <Text style={styles.infoText}>{text}</Text>
+    </View>
+  );
+}
+
+function DocumentStatus({ label, uploaded }: { label: string; uploaded: boolean }) {
+  return (
+    <View style={styles.infoRow}>
+      <Ionicons name={uploaded ? 'checkmark-circle' : 'close-circle-outline'} size={13} color={uploaded ? '#15803D' : '#B7791F'} />
+      <Text style={styles.infoText}>{uploaded ? label : `No ${label} uploaded yet.`}</Text>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#EEF2F6' },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#EEF2F6' },
-  content: { padding: 14, paddingBottom: 24 },
-  heroCardShell: {
-    marginBottom: 10,
-  },
-  heroCard: {
-    backgroundColor: Colors.primaryDark,
-    borderRadius: 20,
-    padding: 16,
-  },
-  heroTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  avatar: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: Colors.secondary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  avatarText: { color: Colors.primaryDark, fontSize: 30, fontWeight: '800' },
-  settingsIconBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  title: { color: '#FFFFFF', fontSize: 18, fontWeight: '800', marginTop: 12 },
-  heroRole: { color: '#C9D4E8', fontSize: 12, fontWeight: '700', marginTop: 2, letterSpacing: 0.5 },
-  statusRow: { flexDirection: 'row', alignItems: 'center', marginTop: 12, gap: 8 },
-  statusDot: { width: 10, height: 10, borderRadius: 5 },
-  statusText: { color: '#fff', fontSize: 12, fontWeight: '700' },
-  settingsRow: {
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#EEF2F6' },
+  content: { padding: 12, paddingBottom: 112, gap: 10 },
+  titleRow: {
+    backgroundColor: RoleColors.lawFirm.shell,
+    minHeight: 52,
+    borderRadius: 0,
+    paddingHorizontal: 14,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#E0E7EF',
-    padding: 14,
-    marginBottom: 10,
-    gap: 12,
+    gap: 10,
+    marginHorizontal: -12,
+    marginTop: -12,
   },
-  settingsRowIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: Colors.primary + '14',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  settingsRowText: { flex: 1, fontSize: 15, fontWeight: '600', color: Colors.text },
-  cardShell: { marginBottom: 10 },
-  accountHealthCard: { backgroundColor: '#FFFFFF', borderRadius: 14, borderWidth: 1, borderColor: '#E0E7EF', padding: 14 },
-  accountHealthTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
-  accountHealthTitle: { color: Colors.text, fontSize: 15, fontWeight: '800' },
-  accountHealthPercent: { color: Colors.primary, fontSize: 18, fontWeight: '800' },
-  progressTrack: { height: 8, borderRadius: 999, backgroundColor: Colors.border + '66', overflow: 'hidden' },
-  progressFill: { height: '100%', backgroundColor: Colors.primary, borderRadius: 999 },
-  accountHealthHint: { color: Colors.textMuted, fontSize: 12, marginTop: 8, lineHeight: 17 },
-  accountDetailsCard: { backgroundColor: '#FFFFFF', borderRadius: 14, borderWidth: 1, borderColor: '#E0E7EF', padding: 14 },
-  accountDetailsTitle: { color: Colors.text, fontSize: 16, fontWeight: '800', marginBottom: 8 },
-  detailRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: Colors.border + '66' },
-  detailLabel: { color: Colors.textMuted, fontSize: 12, width: 64, fontWeight: '600' },
-  detailValue: { color: Colors.text, fontSize: 13, fontWeight: '600', flex: 1 },
-  verifiedDot: { marginLeft: 4 },
-  badgesRow: { marginTop: 12, flexDirection: 'row', gap: 8 },
-  badgeBlue: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#E8F1FF', borderColor: '#CFE0FF', borderWidth: 1, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 },
-  badgeGreen: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#EBFAF2', borderColor: '#C6EED7', borderWidth: 1, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 },
-  badgeTextBlue: { color: '#1A4FA3', fontSize: 11, fontWeight: '700' },
-  badgeTextGreen: { color: '#197A49', fontSize: 11, fontWeight: '700' },
-  logoutCard: {
-    backgroundColor: '#FFF8F8',
-    borderWidth: 1,
-    borderColor: '#F4C7C3',
-    borderRadius: 16,
-    padding: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginTop: 10,
-  },
-  logoutIconWrap: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-    backgroundColor: '#FEE4E2',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  logoutTitle: {
-    color: '#B42318',
-    fontSize: 15,
-    fontWeight: '900',
-  },
-  logoutSubtitle: {
-    color: '#8A3A34',
-    fontSize: 11,
-    fontWeight: '600',
-    marginTop: 2,
-  },
+  screenTitle: { color: '#fff', fontSize: 18, fontWeight: '900' },
+  hero: { backgroundColor: '#194F32', borderRadius: 8, padding: 16, overflow: 'hidden' },
+  heroCircle: { position: 'absolute', right: -34, top: -28, width: 118, height: 118, borderRadius: 59, backgroundColor: 'rgba(255,255,255,0.06)' },
+  heroTop: { flexDirection: 'row', gap: 12, alignItems: 'center' },
+  avatar: { width: 52, height: 52, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.5)', backgroundColor: 'rgba(255,255,255,0.12)', alignItems: 'center', justifyContent: 'center' },
+  avatarText: { color: '#fff', fontWeight: '900', fontSize: 16 },
+  firmName: { color: '#fff', fontSize: 18, fontWeight: '900' },
+  tagline: { color: '#DDF5E7', fontSize: 11, fontWeight: '700', marginTop: 2 },
+  heroBadges: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, marginTop: 8 },
+  badge: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 999, paddingHorizontal: 7, paddingVertical: 3, backgroundColor: 'rgba(255,255,255,0.13)' },
+  badgeGold: { backgroundColor: '#F6C453' },
+  badgeText: { color: '#fff', fontSize: 9, fontWeight: '900' },
+  badgeGoldText: { color: '#7A4D00' },
+  heroStats: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.16)', marginTop: 16, paddingTop: 12 },
+  heroStat: { flex: 1, alignItems: 'center', borderRightWidth: 1, borderRightColor: 'rgba(255,255,255,0.14)' },
+  heroStatValue: { color: '#fff', fontSize: 16, fontWeight: '900' },
+  heroStatLabel: { color: '#DDF5E7', fontSize: 9, fontWeight: '700', marginTop: 2, textAlign: 'center' },
+  editCard: { backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#DDE5EF', padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  editIcon: { width: 30, height: 30, borderRadius: 8, backgroundColor: '#E9F7EF', alignItems: 'center', justifyContent: 'center' },
+  editTitle: { color: RoleColors.lawFirm.shell, fontSize: 14, fontWeight: '900' },
+  editSub: { color: '#60748A', fontSize: 11, marginTop: 1 },
+  editBtn: { backgroundColor: RoleColors.lawFirm.shell, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8 },
+  editBtnText: { color: '#fff', fontSize: 12, fontWeight: '900' },
+  infoCard: { backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#DDE5EF', padding: 12 },
+  infoTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
+  infoTitle: { color: '#B7791F', fontSize: 11, fontWeight: '900', textTransform: 'uppercase' },
+  infoRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, paddingVertical: 4 },
+  infoText: { flex: 1, color: '#334155', fontSize: 12, lineHeight: 17, fontWeight: '600' },
+  aboutText: { color: '#334155', fontSize: 12, lineHeight: 18 },
+  practiceWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  practiceChip: { borderWidth: 1, borderColor: '#7BB58E', backgroundColor: '#EDF8F0', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 },
+  practiceText: { color: '#14532D', fontSize: 11, fontWeight: '800' },
+  logoutBtn: { marginTop: 4, backgroundColor: '#FFF8F8', borderWidth: 1, borderColor: '#F4C7C3', borderRadius: 10, padding: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  logoutText: { color: '#B42318', fontWeight: '900' },
 });
-
-function DetailRow({
-  icon,
-  label,
-  value,
-  verified,
-}: {
-  icon: string;
-  label: string;
-  value: string;
-  verified?: boolean;
-}) {
-  return (
-    <View style={styles.detailRow}>
-      <Ionicons name={icon as any} size={15} color={Colors.primary} />
-      <Text style={styles.detailLabel}>{label}</Text>
-      <Text style={styles.detailValue} numberOfLines={1}>{value}</Text>
-      {verified ? <Ionicons name="checkmark-circle" size={16} color={Colors.success} style={styles.verifiedDot} /> : null}
-    </View>
-  );
-}
-
-function VerificationBadge({
-  icon,
-  text,
-  tone,
-}: {
-  icon: string;
-  text: string;
-  tone: 'blue' | 'green';
-}) {
-  const isBlue = tone === 'blue';
-  return (
-    <View style={isBlue ? styles.badgeBlue : styles.badgeGreen}>
-      <Ionicons name={icon as any} size={13} color={isBlue ? '#1A4FA3' : '#197A49'} />
-      <Text style={isBlue ? styles.badgeTextBlue : styles.badgeTextGreen}>{text}</Text>
-    </View>
-  );
-}

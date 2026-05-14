@@ -6,7 +6,7 @@ import { useAuth } from '@/context/auth';
 import { Colors, RoleColors } from '@/constants/theme';
 
 export default function SecurityLockScreen() {
-  const { user, securityLocked, securityPinEnabled, securityLockReason, unlockWithPin, logout } = useAuth();
+  const { user, securityLocked, securityPinEnabled, securityLockReason, unlockWithPin } = useAuth();
   const [pin, setPin] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -78,10 +78,6 @@ export default function SecurityLockScreen() {
 
           <TouchableOpacity style={styles.primaryBtn} onPress={handleUnlock} disabled={busy}>
             {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Unlock</Text>}
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.secondaryBtn} onPress={logout}>
-            <Text style={styles.secondaryText}>Secure logout</Text>
           </TouchableOpacity>
 
           {!securityPinEnabled ? (
@@ -157,15 +153,5 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   primaryText: { color: '#fff', fontWeight: '900', fontSize: 15 },
-  secondaryBtn: {
-    backgroundColor: '#F8FAFD',
-    borderRadius: 14,
-    minHeight: 46,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#D9E2F2',
-  },
-  secondaryText: { color: RoleColors.client.shell, fontWeight: '900', fontSize: 14 },
   helperText: { color: Colors.textMuted, fontSize: 12, lineHeight: 17 },
 });

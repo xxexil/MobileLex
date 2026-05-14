@@ -230,6 +230,9 @@ export default function MessagesScreen() {
   const [sending, setSending] = useState(false);
   const [actionMessage, setActionMessage] = useState<Message | null>(null);
   const [actionSheetVisible, setActionSheetVisible] = useState(false);
+  const [editMessage, setEditMessage] = useState<Message | null>(null);
+  const [editDraft, setEditDraft] = useState('');
+  const [editSaving, setEditSaving] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [isRecording, setIsRecording] = useState(false);
@@ -589,6 +592,17 @@ export default function MessagesScreen() {
     }
   }, [loadConversations, removeMessageLocally]);
 
+  const updateMessageLocally = useCallback((target: Message, body: string) => {
+    const conversationId = activeConversationIdRef.current;
+    if (!conversationId) return;
+
+    const cached = fullMessagesByConversationRef.current[conversationId] ?? [];
+    fullMessagesByConversationRef.current[conversationId] = cached.map((message) =>
+      message.id === target.id ? { ...message, body } : message
+    );
+    scheduleConversationSync(conversationId, true, true);
+  }, [scheduleConversationSync]);
+
   const animateActionSheetIn = useCallback(() => {
     actionBackdropOpacity.setValue(0);
     actionSheetTranslateY.setValue(36);
@@ -671,6 +685,37 @@ export default function MessagesScreen() {
       void deleteMessage(target, mode);
     });
   }, [actionMessage, closeMessageActions, deleteMessage]);
+
+  const handleEditAction = useCallback(() => {
+    if (!actionMessage) return;
+    const target = actionMessage;
+    closeMessageActions(() => {
+      setEditMessage(target);
+      setEditDraft(target.body || '');
+    });
+  }, [actionMessage, closeMessageActions]);
+
+  const handleSaveEdit = useCallback(async () => {
+    if (!editMessage) return;
+    const body = editDraft.trim();
+    if (!body) {
+      Alert.alert('Message Required', 'Edited message cannot be empty.');
+      return;
+    }
+
+    setEditSaving(true);
+    try {
+      await lawFirmApi.updateMessage(editMessage.id, body);
+      updateMessageLocally(editMessage, body);
+      setEditMessage(null);
+      setEditDraft('');
+      loadConversations();
+    } catch (error: any) {
+      Alert.alert('Edit Failed', error?.response?.data?.message || 'Could not update the message.');
+    } finally {
+      setEditSaving(false);
+    }
+  }, [editDraft, editMessage, loadConversations, updateMessageLocally]);
 
   async function loadConversations() {
     try {
@@ -1776,6 +1821,19 @@ export default function MessagesScreen() {
 
               <Text style={styles.actionSectionLabel}>Choose an action</Text>
 
+              {actionMessage?.is_mine && actionMessage.id > 0 && !actionMessage.local_id && !actionMessage.attachment_url ? (
+                <TouchableOpacity style={[styles.actionBtn, styles.actionBtnOutline]} onPress={handleEditAction}>
+                  <View style={[styles.actionBtnIconWrap, styles.actionBtnIconOutline]}>
+                    <Icon name="create-outline" size={18} color={Colors.primary} />
+                  </View>
+                  <View style={styles.actionBtnCopy}>
+                    <Text style={[styles.actionBtnTitle, styles.actionBtnTitleDark]}>Edit message</Text>
+                    <Text style={styles.actionBtnCaption}>Update the text in this conversation</Text>
+                  </View>
+                  <Icon name="chevron-forward" size={18} color={Colors.textLight} />
+                </TouchableOpacity>
+              ) : null}
+
               {actionMessage?.is_mine && actionMessage.id > 0 && !actionMessage.local_id ? (
                 <TouchableOpacity style={[styles.actionBtn, styles.actionBtnOutline]} onPress={() => handleDeleteAction('everyone')}>
                   <View style={[styles.actionBtnIconWrap, styles.actionBtnIconOutline]}>
@@ -1804,6 +1862,31 @@ export default function MessagesScreen() {
                 <Text style={styles.actionCancelText}>Cancel</Text>
               </TouchableOpacity>
             </Animated.View>
+          </View>
+        </Modal>
+        <Modal visible={!!editMessage} transparent animationType="fade" statusBarTranslucent onRequestClose={() => setEditMessage(null)}>
+          <View style={styles.editOverlay}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={() => setEditMessage(null)} />
+            <View style={styles.editCard}>
+              <Text style={styles.editTitle}>Edit Message</Text>
+              <TextInput
+                style={styles.editInput}
+                value={editDraft}
+                onChangeText={setEditDraft}
+                multiline
+                autoFocus
+                placeholder="Update your message"
+                placeholderTextColor={Colors.textLight}
+              />
+              <View style={styles.editActions}>
+                <TouchableOpacity style={styles.editCancelBtn} onPress={() => setEditMessage(null)} disabled={editSaving}>
+                  <Text style={styles.editCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.editSaveBtn} onPress={handleSaveEdit} disabled={editSaving}>
+                  {editSaving ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.editSaveText}>Save</Text>}
+                </TouchableOpacity>
+              </View>
+            </View>
           </View>
         </Modal>
       </SafeAreaView>
@@ -2638,6 +2721,51 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   contactCloseText: { color: Colors.text, fontWeight: '700' },
+  editOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: 18,
+    backgroundColor: 'rgba(9, 18, 38, 0.45)',
+  },
+  editCard: {
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#E3EAF6',
+    padding: 16,
+  },
+  editTitle: { color: Colors.text, fontSize: 18, fontWeight: '900', marginBottom: 12 },
+  editInput: {
+    minHeight: 118,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: Colors.text,
+    fontSize: 14,
+    textAlignVertical: 'top',
+  },
+  editActions: { flexDirection: 'row', gap: 10, marginTop: 14 },
+  editCancelBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#D8E2F1',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  editCancelText: { color: Colors.text, fontWeight: '800' },
+  editSaveBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: RoleColors.lawFirm.shell,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  editSaveText: { color: '#fff', fontWeight: '900' },
 });
 
 

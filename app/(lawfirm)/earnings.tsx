@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -13,6 +14,8 @@ import { Ionicons as IoniconsBase } from '@expo/vector-icons';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { lawFirmApi } from '@/services/api';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
 
 const Ionicons = IoniconsBase as any;
 const PAGE_SIZE = 8;
@@ -77,6 +80,7 @@ export default function LawFirmEarnings() {
   const [currentPage, setCurrentPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -199,6 +203,33 @@ export default function LawFirmEarnings() {
     return pages;
   }, [safePage, totalPages]);
 
+  const handleExport = useCallback(async () => {
+    setExporting(true);
+    try {
+      const response = await lawFirmApi.exportEarnings();
+      const csv = typeof response?.data === 'string' ? response.data : String(response?.data ?? '');
+      if (!csv.trim()) throw new Error('The export was empty.');
+      const filename = `firm-earnings-${new Date().toISOString().slice(0, 10)}.csv`;
+      const uri = `${FileSystem.documentDirectory}${filename}`;
+      await FileSystem.writeAsStringAsync(uri, csv);
+
+      const canShare = await Sharing.isAvailableAsync();
+      if (canShare) {
+        await Sharing.shareAsync(uri, {
+          mimeType: 'text/csv',
+          dialogTitle: 'Export Firm Earnings',
+          UTI: 'public.comma-separated-values-text',
+        });
+      } else {
+        Alert.alert('Export Ready', `CSV saved as ${filename}.`);
+      }
+    } catch (err: any) {
+      Alert.alert('Export Failed', err?.response?.data?.message || 'Unable to export earnings right now.');
+    } finally {
+      setExporting(false);
+    }
+  }, []);
+
   if (loading) return <View style={styles.center}><ActivityIndicator size="large" color="#243A67" /></View>;
 
   return (
@@ -213,6 +244,10 @@ export default function LawFirmEarnings() {
           <Text style={styles.heroLabel}>Firm Earnings</Text>
           <Text style={styles.heroValue}>{formatCurrency(summary.totalEarned)}</Text>
           <Text style={styles.heroSubtext}>Track your firm share retained from team consultations.</Text>
+          <TouchableOpacity style={styles.exportBtn} onPress={handleExport} disabled={exporting}>
+            {exporting ? <ActivityIndicator size="small" color="#0C2757" /> : <Ionicons name="download-outline" size={16} color="#0C2757" />}
+            <Text style={styles.exportBtnText}>Export CSV</Text>
+          </TouchableOpacity>
         </LinearGradient>
 
         {apiError ? (
@@ -370,6 +405,18 @@ const styles = StyleSheet.create({
   heroLabel: { color: '#DCEBFF', fontSize: 14, fontWeight: '800' },
   heroValue: { color: '#FFFFFF', fontSize: 32, fontWeight: '900', marginTop: 8 },
   heroSubtext: { color: '#DCEBFF', marginTop: 8, lineHeight: 20 },
+  exportBtn: {
+    alignSelf: 'flex-start',
+    marginTop: 14,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    minHeight: 40,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+  exportBtnText: { color: '#0C2757', fontSize: 13, fontWeight: '900' },
   errorCard: {
     backgroundColor: '#FCEBEC',
     borderRadius: 12,

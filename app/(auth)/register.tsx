@@ -1,5 +1,41 @@
 import { useState } from 'react';
-// Password strength helper
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  ScrollView,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  StatusBar,
+} from 'react-native';
+import * as DocumentPicker from 'expo-document-picker';
+import AppButton from '@/components/AppButton';
+import { Link, useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import { authApi } from '@/services/api';
+import { useAuth } from '@/context/auth';
+import { Colors } from '@/constants/theme';
+
+type Role = 'client' | 'lawyer' | 'law_firm';
+type UploadKey = 'government_id' | 'ibp_id' | 'dti_sec_registration' | 'business_permit' | 'valid_id';
+type UploadFile = {
+  uri: string;
+  name: string;
+  type: string;
+  size?: number;
+};
+
+const DOCUMENT_MIME_TYPES = [
+  'image/*',
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+];
+const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
+
 function getPasswordStrength(password: string) {
   if (!password) return { label: '', color: undefined };
   if (password.length < 6) return { label: 'Weak', color: '#B00020' };
@@ -11,18 +47,6 @@ function getPasswordStrength(password: string) {
   }
   return { label: 'Weak', color: '#B00020' };
 }
-import {
-  View, Text, TextInput, TouchableOpacity, StyleSheet,
-  ScrollView, Alert, KeyboardAvoidingView, Platform, StatusBar,
-} from 'react-native';
-import AppButton from '@/components/AppButton';
-import { Link, useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
-import { authApi } from '@/services/api';
-import { useAuth } from '@/context/auth';
-import { Colors } from '@/constants/theme';
-
-type Role = 'client' | 'lawyer' | 'law_firm';
 
 export default function RegisterScreen() {
   const router = useRouter();
@@ -30,37 +54,103 @@ export default function RegisterScreen() {
   const [role, setRole] = useState<Role>('client');
   const [loading, setLoading] = useState(false);
 
-  // Common fields
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [passwordConfirm, setPasswordConfirm] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [showPasswordConfirm, setShowPasswordConfirm] = useState(false);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
 
-  // Client / Law Firm
   const [name, setName] = useState('');
-
-  // Lawyer specific
   const [firstName, setFirstName] = useState('');
+  const [middleName, setMiddleName] = useState('');
   const [lastName, setLastName] = useState('');
   const [specialty, setSpecialty] = useState('');
   const [hourlyRate, setHourlyRate] = useState('');
   const [experience, setExperience] = useState('');
   const [location, setLocation] = useState('');
 
-  // Law Firm specific
   const [firmName, setFirmName] = useState('');
+  const [city, setCity] = useState('');
+  const [phone, setPhone] = useState('');
+  const [website, setWebsite] = useState('');
+  const [uploads, setUploads] = useState<Partial<Record<UploadKey, UploadFile>>>({});
 
-  const roles: { value: Role; label: string }[] = [
-    { value: 'client', label: 'Client' },
-    { value: 'lawyer', label: 'Lawyer' },
-    { value: 'law_firm', label: 'Law Firm' },
+  const roles: { value: Role; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+    { value: 'client', label: "I'm a Client", icon: 'person' },
+    { value: 'lawyer', label: "I'm a Lawyer", icon: 'hammer' },
+    { value: 'law_firm', label: 'Law Firm', icon: 'business' },
   ];
+
+  const subtitle =
+    role === 'lawyer'
+      ? 'Create your lawyer account'
+      : role === 'law_firm'
+        ? 'Register your law firm'
+        : 'Create your client account';
+
+  const submitLabel =
+    role === 'lawyer' ? 'Register as Lawyer' : role === 'law_firm' ? 'Register Firm' : 'Create Account';
+
+  async function pickRegistrationDocument(key: UploadKey) {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: DOCUMENT_MIME_TYPES,
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+
+      if (result.canceled || !result.assets?.[0]) return;
+
+      const asset = result.assets[0];
+      if ((asset.size ?? 0) > MAX_DOCUMENT_BYTES) {
+        Alert.alert('File Too Large', 'Please choose a document or image that is 10 MB or smaller.');
+        return;
+      }
+
+      setUploads((prev) => ({
+        ...prev,
+        [key]: {
+          uri: asset.uri,
+          name: asset.name || `${key}.pdf`,
+          type: asset.mimeType || 'application/octet-stream',
+          size: asset.size,
+        },
+      }));
+    } catch (error: any) {
+      Alert.alert('Upload Failed', error?.message || 'Could not open the file picker. Please try again.');
+    }
+  }
+
+  function buildRegistrationForm(data: Record<string, unknown>) {
+    const form = new FormData();
+    Object.entries(data).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        form.append(key, String(value));
+      }
+    });
+
+    Object.entries(uploads).forEach(([key, file]) => {
+      if (file) {
+        form.append(key, {
+          uri: file.uri,
+          name: file.name,
+          type: file.type,
+        } as any);
+      }
+    });
+
+    return form;
+  }
 
   async function handleRegister() {
     const normalizedEmail = email.trim().toLowerCase();
     if (!normalizedEmail || !password || !passwordConfirm) {
       Alert.alert('Error', 'Please fill in all required fields.');
+      return;
+    }
+    if (!acceptedTerms) {
+      Alert.alert('Error', 'Please accept the Terms and Conditions and Privacy Policy.');
       return;
     }
     if (password !== passwordConfirm) {
@@ -79,19 +169,25 @@ export default function RegisterScreen() {
       data.name = name;
     } else if (role === 'lawyer') {
       data.first_name = firstName;
+      data.middle_name = middleName;
       data.last_name = lastName;
       data.specialty = specialty;
       data.hourly_rate = parseFloat(hourlyRate) || 0;
       data.experience_years = parseInt(experience, 10) || 0;
       data.location = location;
+      data.firm_name = firmName;
     } else if (role === 'law_firm') {
       data.name = name;
       data.firm_name = firmName;
+      data.city = city;
+      data.phone = phone;
+      data.website = website;
     }
 
     setLoading(true);
     try {
-      const { data: res } = await authApi.register(data);
+      const payload = role === 'client' ? data : buildRegistrationForm(data);
+      const { data: res } = await authApi.register(payload);
       await setSession(res.token, res.user);
       router.replace('/');
     } catch (err: any) {
@@ -109,179 +205,212 @@ export default function RegisterScreen() {
     }
   }
 
+  const renderPasswordField = (
+    value: string,
+    onChangeText: (value: string) => void,
+    showValue: boolean,
+    onToggle: () => void,
+    placeholder: string,
+    showStrength = false,
+  ) => {
+    const strength = getPasswordStrength(value);
+
+    return (
+      <View style={styles.passwordBlock}>
+        <View
+          style={[
+            styles.passwordRow,
+            showStrength && value.length > 0 && {
+              borderColor:
+                strength.label === 'Weak'
+                  ? '#B00020'
+                  : strength.label === 'Good'
+                    ? '#fbc02d'
+                    : strength.label === 'Strong'
+                      ? '#388e3c'
+                      : Colors.border,
+            },
+          ]}
+        >
+          <TextInput
+            style={[styles.input, styles.passwordInput]}
+            placeholder={placeholder}
+            placeholderTextColor={Colors.textLight}
+            value={value}
+            onChangeText={onChangeText}
+            secureTextEntry={!showValue}
+          />
+          <TouchableOpacity style={styles.eyeBtn} onPress={onToggle} hitSlop={8}>
+            <Ionicons name={showValue ? 'eye-off-outline' : 'eye-outline'} size={17} color={Colors.textLight} />
+          </TouchableOpacity>
+        </View>
+        {showStrength && value.length > 0 && strength.label ? (
+          <>
+            <View style={styles.strengthTrack}>
+              <View
+                style={[
+                  styles.strengthFill,
+                  {
+                    width: strength.label === 'Weak' ? '33%' : strength.label === 'Good' ? '66%' : '100%',
+                    backgroundColor: strength.color,
+                  },
+                ]}
+              />
+            </View>
+            <Text style={[styles.strengthLabel, { color: strength.color }]}>{strength.label}</Text>
+          </>
+        ) : null}
+      </View>
+    );
+  };
+
   return (
     <KeyboardAvoidingView
-      style={{ flex: 1, backgroundColor: Colors.primary }}
-      behavior="padding"
+      style={styles.screen}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : -24}
     >
-      <StatusBar backgroundColor={Colors.primary} barStyle="light-content" />
+      <StatusBar backgroundColor="#FFFFFF" barStyle="dark-content" />
       <ScrollView
-        style={{ backgroundColor: Colors.primary }}
-        contentContainerStyle={[styles.container, { flexGrow: 1 }]}
+        style={styles.screen}
+        contentContainerStyle={styles.container}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.header}>
-          <View style={styles.logoCircle}>
-            <Text style={styles.logoText}>LC</Text>
+        <View style={styles.panel}>
+          <View style={styles.header}>
+            <Text style={styles.appName}>
+              Lex<Text style={styles.appNameAccent}>Connect</Text>
+            </Text>
+            <Text style={styles.tagline}>{subtitle}</Text>
           </View>
-          <Text style={styles.appName}>LexConnect</Text>
-          <Text style={styles.tagline}>Create your account</Text>
-        </View>
 
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Sign Up</Text>
-
-          {/* Role Selector */}
-          <Text style={styles.label}>I am a...</Text>
           <View style={styles.roleRow}>
-            {roles.map((r) => (
-              <TouchableOpacity
-                key={r.value}
-                style={[styles.roleBtn, role === r.value && styles.roleBtnActive]}
-                onPress={() => setRole(r.value)}
-              >
-                <Text style={[styles.roleBtnText, role === r.value && styles.roleBtnTextActive]}>
-                  {r.label}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          {/* Client / Law Firm name */}
-          {(role === 'client' || role === 'law_firm') && (
-            <>
-              <Text style={styles.label}>Full Name *</Text>
-              <TextInput style={styles.input} placeholder="Your name" placeholderTextColor={Colors.textLight} value={name} onChangeText={setName} />
-            </>
-          )}
-
-          {/* Lawyer name */}
-          {role === 'lawyer' && (
-            <>
-              <Text style={styles.label}>First Name *</Text>
-              <TextInput style={styles.input} placeholder="First name" placeholderTextColor={Colors.textLight} value={firstName} onChangeText={setFirstName} />
-              <Text style={styles.label}>Last Name *</Text>
-              <TextInput style={styles.input} placeholder="Last name" placeholderTextColor={Colors.textLight} value={lastName} onChangeText={setLastName} />
-              <Text style={styles.label}>Specialty *</Text>
-              <TextInput style={styles.input} placeholder="e.g. Criminal Law, Family Law" placeholderTextColor={Colors.textLight} value={specialty} onChangeText={setSpecialty} />
-              <Text style={styles.label}>Hourly Rate (₱) *</Text>
-              <TextInput style={styles.input} placeholder="e.g. 1500" placeholderTextColor={Colors.textLight} value={hourlyRate} onChangeText={setHourlyRate} keyboardType="numeric" />
-              <Text style={styles.label}>Years of Experience *</Text>
-              <TextInput style={styles.input} placeholder="e.g. 5" placeholderTextColor={Colors.textLight} value={experience} onChangeText={setExperience} keyboardType="numeric" />
-              <Text style={styles.label}>Location</Text>
-              <TextInput style={styles.input} placeholder="City, Region" placeholderTextColor={Colors.textLight} value={location} onChangeText={setLocation} />
-            </>
-          )}
-
-          {/* Law Firm name */}
-          {role === 'law_firm' && (
-            <>
-              <Text style={styles.label}>Law Firm Name *</Text>
-              <TextInput style={styles.input} placeholder="Your firm name" placeholderTextColor={Colors.textLight} value={firmName} onChangeText={setFirmName} />
-            </>
-          )}
-
-          {/* Common */}
-          <Text style={styles.label}>Email Address *</Text>
-          <TextInput style={styles.input} placeholder="you@example.com" placeholderTextColor={Colors.textLight} value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
-
-
-
-          <Text style={styles.label}>Password *</Text>
-          <View style={{ width: '100%' }}>
-            <View
-              style={[
-                styles.passwordRow,
-                {
-                  borderColor:
-                    getPasswordStrength(password).label === 'Weak'
-                      ? '#B00020'
-                      : getPasswordStrength(password).label === 'Good'
-                      ? '#fbc02d'
-                      : getPasswordStrength(password).label === 'Strong'
-                      ? '#388e3c'
-                      : '#ccc',
-                },
-              ]}
-            >
-              <TextInput
-                style={[styles.input, styles.passwordInput]}
-                placeholder="Min. 6 characters"
-                placeholderTextColor={Colors.textLight}
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry={!showPassword}
-              />
-              <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowPassword((prev) => !prev)}>
-                <Ionicons name={showPassword ? 'eye-off-outline' : 'eye-outline'} size={20} color={Colors.textMuted} />
-              </TouchableOpacity>
-            </View>
-            {/* Password strength bar below input */}
-            {password.length > 0 && getPasswordStrength(password).label && (
-              <>
-                <View style={{ height: 6, borderRadius: 3, backgroundColor: '#eee', width: '100%', marginTop: 2, overflow: 'hidden' }}>
-                  <View
-                    style={{
-                      height: 6,
-                      borderRadius: 3,
-                      width:
-                        getPasswordStrength(password).label === 'Weak'
-                          ? '33%'
-                          : getPasswordStrength(password).label === 'Good'
-                          ? '66%'
-                          : getPasswordStrength(password).label === 'Strong'
-                          ? '100%'
-                          : '0%',
-                      backgroundColor:
-                        getPasswordStrength(password).label === 'Weak'
-                          ? '#B00020'
-                          : getPasswordStrength(password).label === 'Good'
-                          ? '#fbc02d'
-                          : getPasswordStrength(password).label === 'Strong'
-                          ? '#388e3c'
-                          : '#eee',
-                    }}
-                  />
-                </View>
-                <Text
-                  style={{
-                    marginTop: 2,
-                    fontWeight: 'bold',
-                    color: getPasswordStrength(password).color,
-                    fontSize: 13,
-                    textAlign: 'left',
-                    textTransform: 'lowercase',
-                  }}
+            {roles.map((r) => {
+              const active = role === r.value;
+              return (
+                <TouchableOpacity
+                  key={r.value}
+                  style={[styles.roleBtn, active && styles.roleBtnActive]}
+                  onPress={() => setRole(r.value)}
+                  activeOpacity={0.86}
                 >
-                  {getPasswordStrength(password).label}
-                </Text>
-              </>
-            )}
+                  <Ionicons name={r.icon} size={13} color={active ? '#FFFFFF' : Colors.textMuted} />
+                  <Text style={[styles.roleBtnText, active && styles.roleBtnTextActive]} numberOfLines={1}>
+                    {r.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
 
-          <Text style={styles.label}>Confirm Password *</Text>
-          <View style={styles.passwordRow}>
-            <TextInput
-              style={[styles.input, styles.passwordInput]}
-              placeholder="Repeat password"
-              placeholderTextColor={Colors.textLight}
-              value={passwordConfirm}
-              onChangeText={setPasswordConfirm}
-              secureTextEntry={!showPasswordConfirm}
-            />
-            <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowPasswordConfirm((prev) => !prev)}>
-              <Ionicons name={showPasswordConfirm ? 'eye-off-outline' : 'eye-outline'} size={20} color={Colors.textMuted} />
-            </TouchableOpacity>
+          <SectionTitle label="Personal Information" />
+
+          {role !== 'lawyer' ? (
+            <Field label="Full Name" value={name} onChangeText={setName} placeholder="e.g. Alex Johnson" />
+          ) : null}
+
+          <Field
+            label="Email Address"
+            value={email}
+            onChangeText={setEmail}
+            placeholder="you@example.com"
+            keyboardType="email-address"
+            autoCapitalize="none"
+          />
+
+          <View style={styles.fieldRow}>
+            <View style={styles.fieldHalf}>
+              <Text style={styles.label}>Password</Text>
+              {renderPasswordField(password, setPassword, showPassword, () => setShowPassword((prev) => !prev), 'Min. 6 characters', true)}
+            </View>
+            <View style={styles.fieldHalf}>
+              <Text style={styles.label}>Confirm Password</Text>
+              {renderPasswordField(passwordConfirm, setPasswordConfirm, showPasswordConfirm, () => setShowPasswordConfirm((prev) => !prev), 'Repeat password')}
+            </View>
           </View>
 
-          <AppButton label="Create Account" onPress={handleRegister} loading={loading} />
+          {role === 'lawyer' ? (
+            <>
+              <View style={styles.fieldRow}>
+                <View style={styles.fieldHalf}>
+                  <Field label="First Name *" value={firstName} onChangeText={setFirstName} placeholder="e.g. Juan" />
+                </View>
+                <View style={styles.fieldHalf}>
+                  <Field label="Last Name *" value={lastName} onChangeText={setLastName} placeholder="e.g. dela Cruz" />
+                </View>
+              </View>
+              <Field label="Middle Name (optional)" value={middleName} onChangeText={setMiddleName} placeholder="e.g. Santos" />
+
+              <SectionTitle label="Professional Information" />
+              <View style={styles.fieldRow}>
+                <View style={styles.fieldHalf}>
+                  <Field label="Specialty / Practice Area" value={specialty} onChangeText={setSpecialty} placeholder="Select or type your specialty" />
+                </View>
+                <View style={styles.fieldHalf}>
+                  <Field label="Law Firm / Organization" value={firmName} onChangeText={setFirmName} placeholder="Independent (no firm)" />
+                </View>
+              </View>
+              <View style={styles.fieldRow}>
+                <View style={styles.fieldHalf}>
+                  <Field label="Hourly Rate (PHP)" value={hourlyRate} onChangeText={setHourlyRate} placeholder="3000" keyboardType="numeric" />
+                </View>
+                <View style={styles.fieldHalf}>
+                  <Field label="Years of Experience" value={experience} onChangeText={setExperience} placeholder="1" keyboardType="numeric" />
+                </View>
+              </View>
+              <Field label="Location" value={location} onChangeText={setLocation} placeholder="e.g. Makati, Metro Manila" />
+
+              <SectionTitle label="Please Upload Documents For Verification" centered />
+              <View style={styles.uploadRow}>
+                <UploadBox label="Government ID" icon="card" file={uploads.government_id} onPress={() => pickRegistrationDocument('government_id')} />
+                <UploadBox label="IBP ID" icon="document-text" file={uploads.ibp_id} onPress={() => pickRegistrationDocument('ibp_id')} />
+              </View>
+            </>
+          ) : null}
+
+          {role === 'law_firm' ? (
+            <>
+              <SectionTitle label="Firm Information" />
+              <Field label="Firm / Organization Name *" value={firmName} onChangeText={setFirmName} placeholder="e.g. Morrison & Associates" />
+              <View style={styles.fieldRow}>
+                <View style={styles.fieldHalf}>
+                  <Field label="City" value={city} onChangeText={setCity} placeholder="e.g. New York" />
+                </View>
+                <View style={styles.fieldHalf}>
+                  <Field label="Phone" value={phone} onChangeText={setPhone} placeholder="+1 (555) 000-0000" keyboardType="phone-pad" />
+                </View>
+              </View>
+              <Field label="Website" value={website} onChangeText={setWebsite} placeholder="https://yourfirm.com" autoCapitalize="none" />
+
+              <SectionTitle label="Required Registration Documents" centered />
+              <View style={styles.uploadGrid}>
+                <UploadBox label="DTI/SEC Registration" icon="briefcase" file={uploads.dti_sec_registration} onPress={() => pickRegistrationDocument('dti_sec_registration')} />
+                <UploadBox label="Business Permit" icon="document-text" file={uploads.business_permit} onPress={() => pickRegistrationDocument('business_permit')} />
+                <UploadBox label="Valid ID" icon="card" file={uploads.valid_id} onPress={() => pickRegistrationDocument('valid_id')} />
+                <UploadBox label="IBP ID" icon="document-text" file={uploads.ibp_id} onPress={() => pickRegistrationDocument('ibp_id')} />
+              </View>
+            </>
+          ) : null}
+
+          <TouchableOpacity style={styles.termsRow} onPress={() => setAcceptedTerms((prev) => !prev)} activeOpacity={0.8}>
+            <View style={[styles.checkbox, acceptedTerms && styles.checkboxChecked]}>
+              {acceptedTerms ? <Ionicons name="checkmark" size={12} color="#FFFFFF" /> : null}
+            </View>
+            <Text style={styles.termsText}>
+              I have read, understood, and accepted the <Text style={styles.inlineLink}>Terms and Conditions</Text> and{' '}
+              <Text style={styles.inlineLink}>Privacy Policy</Text>
+            </Text>
+          </TouchableOpacity>
+
+          <AppButton label={submitLabel} onPress={handleRegister} loading={loading} style={styles.submitButton} textStyle={styles.submitButtonText} />
 
           <View style={styles.footer}>
             <Text style={styles.footerText}>Already have an account? </Text>
             <Link href="/(auth)/login" asChild>
-              <TouchableOpacity><Text style={styles.footerLink}>Sign In</Text></TouchableOpacity>
+              <TouchableOpacity>
+                <Text style={styles.footerLink}>Sign in</Text>
+              </TouchableOpacity>
             </Link>
           </View>
         </View>
@@ -290,29 +419,328 @@ export default function RegisterScreen() {
   );
 }
 
+type FieldProps = React.ComponentProps<typeof TextInput> & {
+  label: string;
+};
+
+function Field({ label, style, ...props }: FieldProps) {
+  return (
+    <View style={styles.field}>
+      <Text style={styles.label}>{label}</Text>
+      <TextInput style={[styles.input, style]} placeholderTextColor={Colors.textLight} {...props} />
+    </View>
+  );
+}
+
+function SectionTitle({ label, centered = false }: { label: string; centered?: boolean }) {
+  return (
+    <View style={styles.section}>
+      <Text style={[styles.sectionTitle, centered && styles.sectionTitleCentered]}>{label}</Text>
+      <View style={styles.sectionLine} />
+    </View>
+  );
+}
+
+function UploadBox({
+  label,
+  icon,
+  file,
+  onPress,
+}: {
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  file?: UploadFile;
+  onPress: () => void;
+}) {
+  return (
+    <TouchableOpacity
+      style={[styles.uploadBox, file && styles.uploadBoxSelected]}
+      activeOpacity={0.82}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`Upload ${label}`}
+    >
+      <Ionicons name={file ? 'checkmark-circle' : icon} size={13} color={file ? Colors.success : Colors.primary} />
+      <View style={styles.uploadTextColumn}>
+        <Text style={[styles.uploadText, file && styles.uploadTextSelected]} numberOfLines={1}>
+          {label}
+        </Text>
+        {file ? <Text style={styles.uploadFileName} numberOfLines={1}>{file.name}</Text> : null}
+      </View>
+    </TouchableOpacity>
+  );
+}
+
 const styles = StyleSheet.create({
-  container: { flexGrow: 1, justifyContent: 'center', padding: 24 },
-  header: { alignItems: 'center', marginBottom: 28 },
-  logoCircle: { width: 70, height: 70, borderRadius: 35, backgroundColor: Colors.secondary, justifyContent: 'center', alignItems: 'center', marginBottom: 10 },
-  logoText: { fontSize: 28, fontWeight: '800', color: Colors.primary },
-  appName: { fontSize: 26, fontWeight: '800', color: '#fff', letterSpacing: 1 },
-  tagline: { fontSize: 13, color: 'rgba(255,255,255,0.7)', marginTop: 4 },
-  card: { backgroundColor: Colors.card, borderRadius: 20, padding: 24, shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 20, elevation: 8 },
-  cardTitle: { fontSize: 20, fontWeight: '700', color: Colors.text, marginBottom: 16 },
-  label: { fontSize: 13, fontWeight: '600', color: Colors.text, marginBottom: 6, marginTop: 10 },
-  input: { borderWidth: 1.5, borderColor: Colors.border, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: Colors.text, backgroundColor: Colors.background },
-  passwordRow: { flexDirection: 'row', alignItems: 'center', borderWidth: 1.5, borderColor: Colors.border, borderRadius: 10, backgroundColor: Colors.background },
-  passwordInput: { flex: 1, borderWidth: 0, backgroundColor: 'transparent' },
-  eyeBtn: { paddingHorizontal: 12, paddingVertical: 10 },
-  roleRow: { flexDirection: 'row', gap: 8, marginBottom: 4 },
-  roleBtn: { flex: 1, paddingVertical: 10, borderRadius: 8, borderWidth: 1.5, borderColor: Colors.border, alignItems: 'center' },
-  roleBtnActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  roleBtnText: { fontSize: 13, fontWeight: '600', color: Colors.textMuted },
-  roleBtnTextActive: { color: '#fff' },
-  button: { backgroundColor: Colors.primary, borderRadius: 12, paddingVertical: 15, alignItems: 'center', marginTop: 24 },
-  buttonDisabled: { opacity: 0.7 },
-  buttonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
-  footer: { flexDirection: 'row', justifyContent: 'center', marginTop: 20 },
-  footerText: { color: Colors.textMuted, fontSize: 14 },
-  footerLink: { color: Colors.primary, fontSize: 14, fontWeight: '700' },
+  screen: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  container: {
+    flexGrow: 1,
+    paddingHorizontal: 24,
+    paddingVertical: 32,
+  },
+  panel: {
+    width: '100%',
+    maxWidth: 430,
+    alignSelf: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  header: {
+    alignItems: 'center',
+    paddingTop: 8,
+    marginBottom: 24,
+  },
+  appName: {
+    color: Colors.primary,
+    fontSize: 25,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  appNameAccent: {
+    color: Colors.secondary,
+  },
+  tagline: {
+    color: Colors.textLight,
+    fontSize: 13,
+    fontWeight: '600',
+    marginTop: 10,
+  },
+  roleRow: {
+    flexDirection: 'row',
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 8,
+    overflow: 'hidden',
+    marginBottom: 20,
+  },
+  roleBtn: {
+    flex: 1,
+    minHeight: 38,
+    paddingHorizontal: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 4,
+    backgroundColor: '#FFFFFF',
+    borderRightWidth: 1,
+    borderRightColor: Colors.border,
+  },
+  roleBtnActive: {
+    backgroundColor: Colors.primary,
+    borderRightColor: Colors.primary,
+  },
+  roleBtnText: {
+    color: Colors.textMuted,
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0,
+  },
+  roleBtnTextActive: {
+    color: '#FFFFFF',
+  },
+  section: {
+    marginTop: 10,
+    marginBottom: 12,
+  },
+  sectionTitle: {
+    color: Colors.secondary,
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textTransform: 'uppercase',
+    marginBottom: 9,
+  },
+  sectionTitleCentered: {
+    textAlign: 'center',
+  },
+  sectionLine: {
+    height: 1,
+    backgroundColor: '#E8DEBF',
+  },
+  field: {
+    marginBottom: 11,
+  },
+  fieldRow: {
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'flex-start',
+  },
+  fieldHalf: {
+    flex: 1,
+    minWidth: 0,
+  },
+  label: {
+    color: Colors.text,
+    fontSize: 11,
+    fontWeight: '800',
+    marginBottom: 7,
+    letterSpacing: 0,
+  },
+  input: {
+    minHeight: 38,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 7,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    backgroundColor: '#FFFFFF',
+    color: Colors.text,
+    fontSize: 13,
+    fontWeight: '500',
+    letterSpacing: 0,
+  },
+  passwordBlock: {
+    marginBottom: 11,
+  },
+  passwordRow: {
+    minHeight: 38,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 7,
+    backgroundColor: '#FFFFFF',
+  },
+  passwordInput: {
+    flex: 1,
+    minHeight: 36,
+    borderWidth: 0,
+    paddingVertical: 8,
+  },
+  eyeBtn: {
+    paddingHorizontal: 10,
+    alignSelf: 'stretch',
+    justifyContent: 'center',
+  },
+  strengthTrack: {
+    height: 4,
+    marginTop: 4,
+    borderRadius: 2,
+    backgroundColor: '#EEF2F7',
+    overflow: 'hidden',
+  },
+  strengthFill: {
+    height: 4,
+    borderRadius: 2,
+  },
+  strengthLabel: {
+    marginTop: 3,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  uploadRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 12,
+  },
+  uploadGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginBottom: 12,
+  },
+  uploadBox: {
+    flex: 1,
+    minWidth: '46%',
+    minHeight: 42,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: Colors.primary,
+    borderRadius: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 4,
+    paddingHorizontal: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  uploadBoxSelected: {
+    borderStyle: 'solid',
+    borderColor: Colors.success,
+    backgroundColor: '#F0FDF4',
+  },
+  uploadTextColumn: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: 'center',
+  },
+  uploadText: {
+    color: Colors.primary,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0,
+  },
+  uploadTextSelected: {
+    color: Colors.success,
+  },
+  uploadFileName: {
+    color: Colors.textMuted,
+    fontSize: 9,
+    fontWeight: '700',
+    marginTop: 2,
+    letterSpacing: 0,
+  },
+  termsRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 7,
+    marginTop: 1,
+    marginBottom: 14,
+  },
+  checkbox: {
+    width: 15,
+    height: 15,
+    borderWidth: 1,
+    borderColor: Colors.textLight,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 1,
+  },
+  checkboxChecked: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  termsText: {
+    flex: 1,
+    color: Colors.textMuted,
+    fontSize: 11,
+    lineHeight: 17,
+    fontWeight: '600',
+    letterSpacing: 0,
+  },
+  inlineLink: {
+    color: Colors.secondary,
+    fontWeight: '900',
+  },
+  submitButton: {
+    minHeight: 40,
+    paddingVertical: 10,
+    borderRadius: 7,
+    backgroundColor: Colors.primary,
+    marginTop: 0,
+  },
+  submitButtonText: {
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  footer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 20,
+    marginBottom: 2,
+  },
+  footerText: {
+    color: Colors.textLight,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  footerLink: {
+    color: Colors.secondary,
+    fontSize: 12,
+    fontWeight: '900',
+  },
 });

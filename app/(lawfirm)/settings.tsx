@@ -15,6 +15,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
 import { authApi, lawFirmApi } from '@/services/api';
 import AppButton from '@/components/AppButton';
 import SecurityCenterCard from '@/components/SecurityCenterCard';
@@ -31,6 +32,22 @@ function pickText(...values: unknown[]) {
   }
   return '';
 }
+
+type FirmDocKey = 'dti_sec_registration' | 'business_permit' | 'valid_id' | 'firm_ibp_id';
+
+const FIRM_DOCUMENTS: { key: FirmDocKey; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+  { key: 'dti_sec_registration', label: 'DTI/SEC Registration', icon: 'business-outline' },
+  { key: 'business_permit', label: 'Business Permit', icon: 'document-text-outline' },
+  { key: 'valid_id', label: 'Valid ID', icon: 'card-outline' },
+  { key: 'firm_ibp_id', label: 'IBP ID', icon: 'id-card-outline' },
+];
+
+const DOCUMENT_MIME_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'application/pdf',
+];
 
 export default function LawFirmSettingsScreen() {
   const router = useRouter();
@@ -51,8 +68,17 @@ export default function LawFirmSettingsScreen() {
   }, [profile?.firm_name, profile?.name]);
 
   const [firmName, setFirmName] = useState('');
+  const [tagline, setTagline] = useState('');
+  const [description, setDescription] = useState('');
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
+  const [city, setCity] = useState('');
+  const [website, setWebsite] = useState('');
+  const [foundedYear, setFoundedYear] = useState('');
+  const [firmSize, setFirmSize] = useState('');
+  const [cutPercentage, setCutPercentage] = useState('');
+  const [specialties, setSpecialties] = useState('');
+  const [documents, setDocuments] = useState<Partial<Record<FirmDocKey, DocumentPicker.DocumentPickerAsset>>>({});
 
   const [currentPassword, setCurrentPassword] = useState('');
   const [nextPassword, setNextPassword] = useState('');
@@ -92,8 +118,16 @@ export default function LawFirmSettingsScreen() {
       setProfile(merged);
       if (merged?.avatar_url) setAvatarUri(resolveStorageUrl(merged.avatar_url));
       setFirmName(pickText(merged?.firm_name, merged?.name));
+      setTagline(String(merged?.tagline ?? ''));
+      setDescription(String(merged?.description ?? ''));
       setPhone(String(merged?.phone ?? ''));
       setAddress(pickText(merged?.address, merged?.location));
+      setCity(String(merged?.city ?? ''));
+      setWebsite(String(merged?.website ?? ''));
+      setFoundedYear(String(merged?.founded_year ?? ''));
+      setFirmSize(String(merged?.firm_size ?? ''));
+      setCutPercentage(String(merged?.cut_percentage ?? ''));
+      setSpecialties(Array.isArray(merged?.specialties) ? merged.specialties.join(', ') : String(merged?.specialties ?? ''));
 
       const createdAt = merged?.created_at ?? '';
       setStatsData({
@@ -128,6 +162,8 @@ export default function LawFirmSettingsScreen() {
   useEffect(() => {
     const unsubscribe = navigation.addListener('beforeRemove', (event) => {
       if (backHandledRef.current) return;
+      const actionType = String(event?.data?.action?.type ?? '');
+      if (actionType === 'JUMP_TO') return;
 
       event.preventDefault();
       backHandledRef.current = true;
@@ -156,7 +192,7 @@ export default function LawFirmSettingsScreen() {
       const ext = (asset.uri.split('.').pop() || 'jpg').toLowerCase();
       const form = new FormData();
       form.append('avatar', { uri: asset.uri, name: `avatar.${ext}`, type: `image/${ext === 'jpg' ? 'jpeg' : ext}` } as any);
-      await lawFirmApi.updateProfile(form as any);
+      await lawFirmApi.updateAvatar(form as any);
       const profileRes = await lawFirmApi.profile();
       const refreshed = profileRes?.data ?? {};
       const nextAvatar = refreshed?.avatar_url ? resolveStorageUrl(refreshed.avatar_url) : asset.uri;
@@ -173,16 +209,67 @@ export default function LawFirmSettingsScreen() {
   async function handleSaveProfile() {
     setSaving(true);
     try {
-      await lawFirmApi.updateProfile({
+      const payload: Record<string, unknown> = {
         firm_name: firmName.trim() || null,
+        tagline: tagline.trim() || null,
+        description: description.trim() || null,
         phone: phone.trim() || null,
         address: address.trim() || null,
         location: address.trim() || null,
-      });
+        city: city.trim() || null,
+        website: website.trim() || null,
+        founded_year: foundedYear.trim() || null,
+        firm_size: firmSize.trim() || null,
+        cut_percentage: cutPercentage.trim() || null,
+        specialties: specialties
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean),
+      };
+
+      await lawFirmApi.updateProfile(payload);
       await load();
-      Alert.alert('Saved', 'Personal information updated successfully.');
+      Alert.alert('Saved', 'Firm profile updated successfully.');
     } catch (err: any) {
       Alert.alert('Save Failed', err?.response?.data?.message || 'Unable to update profile right now.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handlePickDocument(key: FirmDocKey) {
+    const result = await DocumentPicker.getDocumentAsync({
+      type: DOCUMENT_MIME_TYPES,
+      copyToCacheDirectory: true,
+      multiple: false,
+    });
+    if (result.canceled || !result.assets?.length) return;
+    setDocuments((prev) => ({ ...prev, [key]: result.assets[0] }));
+  }
+
+  async function handleSaveDocuments() {
+    const entries = Object.entries(documents) as [FirmDocKey, DocumentPicker.DocumentPickerAsset][];
+    if (entries.length === 0) {
+      Alert.alert('No Documents Selected', 'Choose at least one registration document to upload.');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const form = new FormData();
+      entries.forEach(([key, asset]) => {
+        form.append(key, {
+          uri: asset.uri,
+          name: asset.name || `${key}.pdf`,
+          type: asset.mimeType || 'application/octet-stream',
+        } as any);
+      });
+      await lawFirmApi.updateProfile(form as any);
+      setDocuments({});
+      await load();
+      Alert.alert('Uploaded', 'Registration documents uploaded successfully.');
+    } catch (err: any) {
+      Alert.alert('Upload Failed', err?.response?.data?.message || 'Unable to upload documents right now.');
     } finally {
       setSaving(false);
     }
@@ -289,7 +376,7 @@ export default function LawFirmSettingsScreen() {
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Personal Information</Text>
+          <Text style={styles.cardTitle}>Firm Information</Text>
 
           <Text style={styles.label}>Law Firm Name</Text>
           <TextInput
@@ -329,7 +416,116 @@ export default function LawFirmSettingsScreen() {
             placeholderTextColor={Colors.textLight}
           />
 
-          <AppButton label="Save Personal Info" onPress={handleSaveProfile} loading={saving} style={{ marginTop: 14 }} />
+          <Text style={styles.label}>City</Text>
+          <TextInput
+            style={styles.input}
+            value={city}
+            onChangeText={setCity}
+            placeholder="City"
+            placeholderTextColor={Colors.textLight}
+          />
+
+          <Text style={styles.label}>Website</Text>
+          <TextInput
+            style={styles.input}
+            value={website}
+            onChangeText={setWebsite}
+            keyboardType="url"
+            autoCapitalize="none"
+            placeholder="https://yourfirm.com"
+            placeholderTextColor={Colors.textLight}
+          />
+
+          <Text style={styles.label}>Tagline</Text>
+          <TextInput
+            style={styles.input}
+            value={tagline}
+            onChangeText={setTagline}
+            placeholder="Short firm tagline"
+            placeholderTextColor={Colors.textLight}
+          />
+
+          <Text style={styles.label}>Description</Text>
+          <TextInput
+            style={[styles.input, styles.textArea]}
+            value={description}
+            onChangeText={setDescription}
+            multiline
+            placeholder="Describe your firm"
+            placeholderTextColor={Colors.textLight}
+          />
+
+          <View style={styles.twoCol}>
+            <View style={styles.twoColItem}>
+              <Text style={styles.label}>Founded Year</Text>
+              <TextInput
+                style={styles.input}
+                value={foundedYear}
+                onChangeText={setFoundedYear}
+                keyboardType="number-pad"
+                placeholder="e.g. 2015"
+                placeholderTextColor={Colors.textLight}
+              />
+            </View>
+            <View style={styles.twoColItem}>
+              <Text style={styles.label}>Firm Size</Text>
+              <TextInput
+                style={styles.input}
+                value={firmSize}
+                onChangeText={setFirmSize}
+                placeholder="e.g. 10-20"
+                placeholderTextColor={Colors.textLight}
+              />
+            </View>
+          </View>
+
+          <Text style={styles.label}>Firm Cut Percentage</Text>
+          <TextInput
+            style={styles.input}
+            value={cutPercentage}
+            onChangeText={setCutPercentage}
+            keyboardType="decimal-pad"
+            placeholder="e.g. 15"
+            placeholderTextColor={Colors.textLight}
+          />
+
+          <Text style={styles.label}>Specialties</Text>
+          <TextInput
+            style={styles.input}
+            value={specialties}
+            onChangeText={setSpecialties}
+            placeholder="Family Law, Corporate Law, Labor Law"
+            placeholderTextColor={Colors.textLight}
+          />
+
+          <AppButton label="Save Firm Info" onPress={handleSaveProfile} loading={saving} style={{ marginTop: 14 }} />
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Registration Documents</Text>
+          <Text style={styles.hint}>Upload the same verification documents required on the web dashboard.</Text>
+          <View style={styles.documentGrid}>
+            {FIRM_DOCUMENTS.map((doc) => {
+              const selected = documents[doc.key];
+              return (
+                <TouchableOpacity
+                  key={doc.key}
+                  style={[styles.documentBox, selected && styles.documentBoxSelected]}
+                  onPress={() => handlePickDocument(doc.key)}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name={doc.icon} size={18} color={selected ? '#166534' : Colors.primaryDark} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.documentLabel}>{doc.label}</Text>
+                    <Text style={styles.documentName} numberOfLines={1}>
+                      {selected?.name ?? 'Tap to choose file'}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          <AppButton label="Upload Documents" onPress={handleSaveDocuments} loading={saving} style={{ marginTop: 14 }} />
         </View>
 
         <View style={styles.card}>
@@ -429,6 +625,25 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
   textArea: { minHeight: 76, textAlignVertical: 'top' },
+  twoCol: { flexDirection: 'row', gap: 10 },
+  twoColItem: { flex: 1 },
+  documentGrid: { gap: 10, marginTop: 10 },
+  documentBox: {
+    minHeight: 58,
+    borderWidth: 1.4,
+    borderStyle: 'dashed',
+    borderColor: '#9DB0C7',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#F8FAFD',
+  },
+  documentBoxSelected: { borderColor: '#16A34A', backgroundColor: '#ECFDF3' },
+  documentLabel: { color: Colors.text, fontWeight: '800', fontSize: 13 },
+  documentName: { color: Colors.textMuted, fontSize: 12, marginTop: 2 },
   disabledInput: { opacity: 0.7, backgroundColor: '#F5F7FB' },
   passwordRow: {
     flexDirection: 'row',

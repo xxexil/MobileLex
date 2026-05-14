@@ -50,11 +50,11 @@
         {
           "microphonePermission": "Allow LexConnect to access your microphone for voice messages."
         }
-      ]
+      ],
+      "expo-asset"
     ],
     "experiments": {
-      "typedRoutes": true,
-      "reactCompiler": true
+      "typedRoutes": true
     }
   }
 }

@@ -47,23 +47,52 @@ export default function AdminLayout() {
           }}
         />
         <Tabs.Screen
-          name="users"
+          name="all-users"
           options={{
-            title: 'Users',
+            title: 'All Users',
             tabBarIcon: ({ focused, color, size }) => (
               <AnimatedTabIcon focused={focused} name="people-outline" size={size} color={color} />
             ),
           }}
         />
         <Tabs.Screen
-          name="system"
+          name="lawyers"
           options={{
-            title: 'System',
+            title: 'Lawyers',
             tabBarIcon: ({ focused, color, size }) => (
-              <AnimatedTabIcon focused={focused} name="settings-outline" size={size} color={color} />
+              <AnimatedTabIcon focused={focused} name="briefcase-outline" size={size} color={color} />
             ),
           }}
         />
+        <Tabs.Screen
+          name="law-firms"
+          options={{
+            title: 'Law Firms',
+            tabBarIcon: ({ focused, color, size }) => (
+              <AnimatedTabIcon focused={focused} name="business-outline" size={size} color={color} />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="consultations"
+          options={{
+            title: 'Consultations',
+            tabBarIcon: ({ focused, color, size }) => (
+              <AnimatedTabIcon focused={focused} name="calendar-outline" size={size} color={color} />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="fraud-review"
+          options={{
+            title: 'Fraud Review',
+            tabBarIcon: ({ focused, color, size }) => (
+              <AnimatedTabIcon focused={focused} name="shield-checkmark-outline" size={size} color={color} />
+            ),
+          }}
+        />
+        <Tabs.Screen name="users" options={{ href: null }} />
+        <Tabs.Screen name="system" options={{ href: null }} />
       </Tabs>
     </RequireRole>
   );

@@ -13,7 +13,6 @@ export default function SecurityCenterCard() {
     setSecurityPin,
     disableSecurityPin,
     lockApp,
-    logout,
   } = useAuth();
   const [pinVisible, setPinVisible] = useState(false);
   const [pin, setPin] = useState('');
@@ -99,7 +98,6 @@ export default function SecurityCenterCard() {
       <View style={styles.bullets}>
         <Bullet text="Auto-lock when the app leaves the foreground" />
         <Bullet text="Manual lock for sensitive workspaces" />
-        <Bullet text="Secure logout if a device feels compromised" />
       </View>
 
       <View style={styles.actions}>
@@ -121,10 +119,6 @@ export default function SecurityCenterCard() {
           <Text style={[styles.secondaryText, !securityPinEnabled && styles.secondaryTextDisabled]}>Lock now</Text>
         </TouchableOpacity>
       </View>
-
-      <TouchableOpacity style={styles.logoutBtn} onPress={logout}>
-        <Text style={styles.logoutText}>Secure logout</Text>
-      </TouchableOpacity>
 
       {securityPinEnabled ? (
         <TouchableOpacity style={styles.disableLink} onPress={disableSecurityPin}>
@@ -186,32 +180,32 @@ function Bullet({ text }: { text: string }) {
 const styles = StyleSheet.create({
   card: {
     backgroundColor: '#fff',
-    borderRadius: 18,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: '#E7ECF5',
-    padding: 16,
-    gap: 12,
+    padding: 14,
+    gap: 10,
     shadowColor: Colors.primaryDark,
     shadowOpacity: 0.05,
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 4 },
     elevation: 2,
   },
-  header: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  header: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
   iconWrap: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
+    width: 36,
+    height: 36,
+    borderRadius: 11,
     backgroundColor: RoleColors.client.shell,
     alignItems: 'center',
     justifyContent: 'center',
   },
   title: { color: Colors.text, fontSize: 16, fontWeight: '800' },
-  desc: { color: Colors.textMuted, fontSize: 12, lineHeight: 17, marginTop: 3 },
+  desc: { color: Colors.textMuted, fontSize: 12, lineHeight: 16, marginTop: 2 },
   badge: {
     borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
     alignSelf: 'flex-start',
   },
   badgeSafe: { backgroundColor: '#DCFCE7' },
@@ -221,9 +215,9 @@ const styles = StyleSheet.create({
   statusBox: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 10,
-    padding: 12,
-    borderRadius: 14,
+    gap: 9,
+    padding: 10,
+    borderRadius: 13,
     borderWidth: 1,
   },
   statusSafe: { backgroundColor: '#ECFDF5', borderColor: '#BBF7D0' },
@@ -232,7 +226,7 @@ const styles = StyleSheet.create({
   statusTitle: { color: Colors.text, fontSize: 13, fontWeight: '800' },
   statusText: { color: Colors.textMuted, fontSize: 12, lineHeight: 16, marginTop: 2 },
   helperText: { color: Colors.textMuted, fontSize: 12, lineHeight: 17 },
-  bullets: { gap: 8 },
+  bullets: { gap: 7 },
   bulletRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   bulletDot: {
     width: 7,
@@ -245,7 +239,7 @@ const styles = StyleSheet.create({
   actions: { flexDirection: 'row', gap: 8 },
   primaryBtn: {
     flex: 1,
-    minHeight: 46,
+    minHeight: 44,
     backgroundColor: RoleColors.client.shell,
     borderRadius: 14,
     alignItems: 'center',
@@ -256,7 +250,7 @@ const styles = StyleSheet.create({
   primaryText: { color: '#fff', fontWeight: '900', fontSize: 13 },
   secondaryBtn: {
     flex: 1,
-    minHeight: 46,
+    minHeight: 44,
     borderRadius: 14,
     borderWidth: 1,
     borderColor: '#D9E2F2',
@@ -269,16 +263,6 @@ const styles = StyleSheet.create({
   secondaryBtnDisabled: { opacity: 0.7 },
   secondaryText: { color: RoleColors.client.shell, fontWeight: '900', fontSize: 13 },
   secondaryTextDisabled: { color: '#94A3B8' },
-  logoutBtn: {
-    minHeight: 46,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#F8FAFD',
-    borderWidth: 1,
-    borderColor: '#D9E2F2',
-  },
-  logoutText: { color: Colors.error, fontWeight: '900', fontSize: 13 },
   disableLink: { alignSelf: 'flex-start' },
   disableText: { color: Colors.textMuted, fontSize: 12, fontWeight: '700', textDecorationLine: 'underline' },
   modalBackdrop: {

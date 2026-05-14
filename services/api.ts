@@ -86,6 +86,15 @@ async function postWithFallback(paths: string[], data: Record<string, unknown>) 
   throw lastError;
 }
 
+async function putPostWithFallback(path: string, data: Record<string, unknown> | FormData, config?: Record<string, unknown>) {
+  try {
+    return await api.put(path, data, config);
+  } catch (error: any) {
+    if (!isRouteMissingError(error) && error?.response?.status !== 405) throw error;
+    return api.post(path, data, config);
+  }
+}
+
 // Attach token to every request
 api.interceptors.request.use(async (config: any) => {
   const token = await SecureStore.getItemAsync(AUTH_TOKEN_KEY);
@@ -144,8 +153,12 @@ api.interceptors.response.use(
 export const authApi = {
   login: (email: string, password: string) =>
     api.post('/auth/login', { email, password }),
-  register: (data: Record<string, unknown>) =>
-    api.post('/auth/register', data),
+  register: (data: Record<string, unknown> | FormData) =>
+    api.post('/auth/register', data, {
+      headers: typeof FormData !== 'undefined' && data instanceof FormData
+        ? { 'Content-Type': 'multipart/form-data' }
+        : undefined,
+    }),
   logout: () => api.post('/auth/logout'),
   me: () => api.get('/auth/me'),
   resetPassword: (data: Record<string, unknown>) =>
@@ -306,6 +319,7 @@ export const lawFirmApi = {
   applications: () => api.get('/lawfirm/applications'),
   acceptApplication: (id: number) => api.post(`/lawfirm/applications/${id}/accept`),
   rejectApplication: (id: number) => api.post(`/lawfirm/applications/${id}/reject`),
+  removeLawyer: (id: number) => api.post(`/lawfirm/lawyers/${id}/remove`),
   consultations: async () => {
     try {
       return await api.get('/lawfirm/consultations');
@@ -390,17 +404,28 @@ export const lawFirmApi = {
   },
   deleteMessage: (messageId: number, mode: 'me' | 'everyone') =>
     api.delete(`/lawfirm/messages/${messageId}`, { data: { mode } }),
+  updateMessage: (messageId: number, body: string) =>
+    api.put(`/lawfirm/messages/${messageId}`, { body }),
   profile: () => api.get('/lawfirm/profile'),
-  updateProfile: (data: Record<string, unknown> | FormData) => api.put('/lawfirm/profile', data, {
+  updateAvatar: (data: FormData) => api.post('/lawfirm/profile/avatar', data, {
     headers: typeof FormData !== 'undefined' && data instanceof FormData
       ? { 'Content-Type': 'multipart/form-data' } : undefined,
   }),
+  updateProfile: (data: Record<string, unknown> | FormData) => putPostWithFallback('/lawfirm/profile', data, {
+    headers: typeof FormData !== 'undefined' && data instanceof FormData
+      ? { 'Content-Type': 'multipart/form-data' } : undefined,
+  }),
+  exportEarnings: () => api.get('/lawfirm/earnings/export', { responseType: 'text' }),
 };
 
 // Admin
 export const adminApi = {
   dashboard: () => api.get('/admin/dashboard'),
   users: () => api.get('/admin/users'),
+  lawyers: (params?: Record<string, unknown>) => api.get('/admin/lawyers', { params }),
+  lawFirms: (params?: Record<string, unknown>) => api.get('/admin/law-firms', { params }),
+  consultations: (params?: Record<string, unknown>) => api.get('/admin/consultations', { params }),
+  fraudRiskEvents: (params?: Record<string, unknown>) => api.get('/admin/fraud-risk-events', { params }),
   systemStatus: () => api.get('/admin/system-status'),
 };
 

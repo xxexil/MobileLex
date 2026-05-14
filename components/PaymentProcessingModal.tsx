@@ -38,7 +38,7 @@ export const PaymentProcessingModal = React.forwardRef<any, PaymentProcessingPro
     onError,
     onCancel,
   }, ref) => {
-    const [steps, setSteps] = useState<PaymentStep[]>([
+  const [steps, setSteps] = useState<PaymentStep[]>([
       { id: 'booking', label: 'Booking Submitted', completed: false },
       { id: 'payment', label: 'Processing Payment', completed: false },
       { id: 'confirmation', label: 'Payment Confirmed', completed: false },
@@ -63,12 +63,17 @@ export const PaymentProcessingModal = React.forwardRef<any, PaymentProcessingPro
     };
 
     return (
-      <Modal visible={visible} transparent animationType="fade">
+      <Modal visible={visible} transparent animationType="fade" statusBarTranslucent>
         <View style={styles.overlay}>
           <View style={styles.container}>
-            <Text style={styles.title}>Booking Consultation</Text>
+            <View style={styles.headerIcon}>
+              <Ionicons name="card-outline" size={28} color="#FFFFFF" />
+            </View>
+            <Text style={styles.title}>Securing your booking</Text>
             {consultationCode && (
-              <Text style={styles.subtitle}>Booking: {consultationCode}</Text>
+              <View style={styles.codePill}>
+                <Text style={styles.subtitle}>Booking {consultationCode}</Text>
+              </View>
             )}
 
             <View style={styles.stepsContainer}>
@@ -105,7 +110,7 @@ export const PaymentProcessingModal = React.forwardRef<any, PaymentProcessingPro
               ))}
             </View>
 
-            <Text style={styles.message}>Please wait while we process your payment...</Text>
+            <Text style={styles.message}>Please keep this screen open while we confirm the payment.</Text>
 
             <TouchableOpacity
               style={styles.cancelButton}
@@ -126,37 +131,59 @@ PaymentProcessingModal.displayName = 'PaymentProcessingModal';
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    backgroundColor: 'rgba(6, 15, 30, 0.62)',
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: 22,
   },
   container: {
-    backgroundColor: '#1A1F2E',
-    borderRadius: 20,
-    padding: 24,
-    width: '85%',
-    maxWidth: 350,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 26,
+    padding: 20,
+    width: '100%',
+    maxWidth: 390,
+    borderWidth: 1,
+    borderColor: '#E7EDF6',
     elevation: 10,
-    shadowColor: '#000',
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 5 },
+    shadowColor: '#061224',
+    shadowOpacity: 0.24,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 14 },
+  },
+  headerIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    marginBottom: 14,
   },
   title: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 8,
+    fontSize: 23,
+    fontWeight: '900',
+    color: Colors.text,
     textAlign: 'center',
   },
+  codePill: {
+    alignSelf: 'center',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    backgroundColor: '#EEF5FF',
+    borderWidth: 1,
+    borderColor: '#D7E7FF',
+    marginTop: 10,
+  },
   subtitle: {
-    fontSize: 14,
-    color: '#888',
-    marginBottom: 16,
+    fontSize: 12,
+    color: Colors.primary,
+    fontWeight: '800',
     textAlign: 'center',
   },
   stepsContainer: {
-    marginVertical: 24,
+    marginVertical: 22,
   },
   stepWrapper: {
     marginBottom: 12,
@@ -166,57 +193,59 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   stepDot: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#2A2F3E',
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#A9B4C5',
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 12,
   },
   stepDotCompleted: {
-    backgroundColor: '#22c55e',
+    backgroundColor: '#0E8F5A',
   },
   stepDotError: {
-    backgroundColor: '#ef4444',
+    backgroundColor: '#B42318',
   },
   stepLine: {
     width: 2,
     height: 20,
-    backgroundColor: '#2A2F3E',
-    marginLeft: 15,
+    backgroundColor: '#E2E8F2',
+    marginLeft: 16,
     marginVertical: 2,
   },
   stepText: {
     fontSize: 14,
-    color: '#888',
+    color: Colors.textMuted,
     flex: 1,
+    fontWeight: '700',
   },
   stepTextCompleted: {
-    color: '#22c55e',
-    fontWeight: '500',
+    color: '#0E8F5A',
+    fontWeight: '900',
   },
   stepTextError: {
-    color: '#ef4444',
+    color: '#B42318',
   },
   message: {
     fontSize: 13,
-    color: '#aaa',
+    color: Colors.textMuted,
     textAlign: 'center',
     marginBottom: 20,
-    fontStyle: 'italic',
+    lineHeight: 19,
   },
   cancelButton: {
-    paddingVertical: 12,
+    paddingVertical: 14,
     paddingHorizontal: 20,
-    borderRadius: 8,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#444',
+    borderColor: '#DDE5F0',
     alignItems: 'center',
+    backgroundColor: '#F7FAFD',
   },
   cancelButtonText: {
-    color: '#888',
-    fontWeight: '500',
+    color: Colors.text,
+    fontWeight: '800',
     fontSize: 14,
   },
 });

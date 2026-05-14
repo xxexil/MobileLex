@@ -14,6 +14,7 @@ import { useAuth } from '@/context/auth';
 import { Colors } from '@/constants/theme';
 import OtpModal from '@/components/OtpModal';
 import AnimatedBorderCard from '@/components/AnimatedBorderCard';
+import ConfirmActionModal from '@/components/ConfirmActionModal';
 import { resolveStorageUrl } from '@/services/endpoints';
 
 const AVAILABILITY_OPTIONS = [
@@ -93,6 +94,7 @@ export default function LawyerProfile() {
   const [editing, setEditing] = useState(false);
   const [blockedDatesLoading, setBlockedDatesLoading] = useState(false);
   const [blockingActionLoading, setBlockingActionLoading] = useState(false);
+  const [logoutConfirmVisible, setLogoutConfirmVisible] = useState(false);
 
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
@@ -181,10 +183,12 @@ export default function LawyerProfile() {
   }
 
   const handleLogout = useCallback(() => {
-    Alert.alert('Log out', 'Are you sure you want to log out of this lawyer account?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Log out', style: 'destructive', onPress: logout },
-    ]);
+    setLogoutConfirmVisible(true);
+  }, []);
+
+  const confirmLogout = useCallback(() => {
+    setLogoutConfirmVisible(false);
+    logout();
   }, [logout]);
 
   async function save() {
@@ -531,6 +535,18 @@ export default function LawyerProfile() {
         onClose={() => setShowPhoneModal(false)}
       />
     </ScrollView>
+
+    <ConfirmActionModal
+      visible={logoutConfirmVisible}
+      title="End this session?"
+      message="You will be signed out of this lawyer account and returned to the login screen."
+      confirmLabel="Log out"
+      cancelLabel="Stay signed in"
+      icon="log-out-outline"
+      tone="danger"
+      onCancel={() => setLogoutConfirmVisible(false)}
+      onConfirm={confirmLogout}
+    />
     </SafeAreaView>
   );
 }
