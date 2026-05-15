@@ -1,6 +1,7 @@
 import React from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors } from '@/constants/theme';
 
 const EMOJIS = ['\u{1F44D}', '\u{1F60A}', '\u{1F602}', '\u{2764}\u{FE0F}', '\u{1F64F}', '\u{1F525}', '\u{1F389}', '\u{1F973}'];
@@ -45,7 +46,7 @@ export default function MessengerComposer({
   pendingBottomCount,
 }: MessengerComposerProps) {
   return (
-    <View style={styles.wrapper}>
+    <SafeAreaView style={styles.wrapper} edges={['bottom', 'left', 'right']}>
       {pendingBottomCount > 0 && (
         <TouchableOpacity style={styles.jumpToLatestBtn} onPress={onJumpToLatest}>
           <Ionicons name="arrow-down-circle" size={16} color="#fff" />
@@ -117,7 +118,7 @@ export default function MessengerComposer({
           </View>
         </View>
       )}
-    </View>
+    </SafeAreaView>
   );
 }
 

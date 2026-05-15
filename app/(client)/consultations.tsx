@@ -68,6 +68,8 @@ const Notifications = !isExpoGo
   : null;
 const REMINDER_OFFSET_MINUTES = 5;
 const CALL_JOIN_LEAD_MINUTES = 5;
+const CALL_TIME_WARNING_MINUTES = 10;
+const CALL_TIME_FINAL_WARNING_MINUTES = 5;
 const JOIN_ALARM_PREFIX = 'consultation_join_alarm_';
 
 function getMobileCallbackUrl(path: string): string {
@@ -1094,9 +1096,38 @@ export default function ClientConsultations() {
       return;
     }
 
-    void Linking.openURL(`tel:${phoneNumber}`).catch(() => {
-      Alert.alert('Call Failed', 'Could not open the phone dialer on this device.');
-    });
+    const openDialer = () => {
+      void Linking.openURL(`tel:${phoneNumber}`).catch(() => {
+        Alert.alert('Call Failed', 'Could not open the phone dialer on this device.');
+      });
+    };
+
+    const scheduledTime = new Date(item.scheduled_at).getTime();
+    const durationMinutes = Number(item.duration_minutes || 60);
+    const endTime = scheduledTime + durationMinutes * 60 * 1000;
+    const remainingMs = endTime - Date.now();
+
+    if (Number.isFinite(scheduledTime) && remainingMs <= 0) {
+      Alert.alert('Call Time Ended', 'This phone consultation window has already ended.');
+      return;
+    }
+
+    if (Number.isFinite(scheduledTime) && remainingMs > 0 && remainingMs <= CALL_TIME_WARNING_MINUTES * 60 * 1000) {
+      const warningMinutes = remainingMs <= CALL_TIME_FINAL_WARNING_MINUTES * 60 * 1000
+        ? CALL_TIME_FINAL_WARNING_MINUTES
+        : CALL_TIME_WARNING_MINUTES;
+      Alert.alert(
+        `${warningMinutes} Minutes Left`,
+        `This phone consultation has about ${Math.ceil(remainingMs / 60000)} minute(s) remaining. Do you want to continue calling?`,
+        [
+          { text: 'Not Now', style: 'cancel' },
+          { text: 'Continue Call', onPress: openDialer },
+        ]
+      );
+      return;
+    }
+
+    openDialer();
   }
 
   function showInPersonSession(item: Consultation) {

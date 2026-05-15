@@ -403,7 +403,7 @@ export default function MessagesScreen() {
     const showSubscription = Keyboard.addListener(showEvent, (event) => {
       pendingLatestSnapRef.current = true;
       const keyboardHeight = Number(event?.endCoordinates?.height ?? 0);
-      setKeyboardDockOffset(Math.max(0, keyboardHeight - insets.bottom));
+      setKeyboardDockOffset(Platform.OS === 'ios' ? Math.max(0, keyboardHeight - insets.bottom) : 0);
       if (!activeConversationIdRef.current) return;
       prioritizeThreadLatest(false);
     });
@@ -467,6 +467,14 @@ export default function MessagesScreen() {
 
     bumpConversationToTop(conversationId, incoming);
 
+    const isMine = Number(incoming.sender_id) === Number(user?.id) || incoming.is_mine;
+    if (isMine) {
+      setPendingBottomCount(0);
+      shouldStickToBottomRef.current = true;
+      scheduleConversationSync(conversationId, true);
+      return;
+    }
+
     const canAutoScroll = !isUserScrollingRef.current && !isAutoScrollLocked() && (forceScroll || shouldStickToBottomRef.current);
     if (canAutoScroll) {
       scheduleConversationSync(conversationId, forceScroll);
@@ -477,7 +485,7 @@ export default function MessagesScreen() {
       }
       setPendingBottomCount((count) => Math.min(99, count + 1));
     }
-  }, [bumpConversationToTop, flushMessageState, isAutoScrollLocked, scheduleConversationSync]);
+  }, [bumpConversationToTop, flushMessageState, isAutoScrollLocked, scheduleConversationSync, user?.id]);
 
   const createOptimisticMessage = useCallback((message: Omit<Message, 'id' | 'created_at' | 'time'>) => {
     outgoingSeedRef.current += 1;
@@ -945,10 +953,11 @@ export default function MessagesScreen() {
         fullMessagesByConversationRef.current[conversationId] = [...cached, ...newMsgs];
         flushScheduledRef.current = false;
         flushMessageState();
+        const incomingNewMsgs = newMsgs.filter((message) => Number(message.sender_id) !== Number(user?.id) && !message.is_mine);
         if (shouldStickToBottomRef.current) {
           prioritizeThreadLatest(false);
-        } else {
-          setPendingBottomCount((count) => Math.min(99, count + newMsgs.length));
+        } else if (incomingNewMsgs.length > 0) {
+          setPendingBottomCount((count) => Math.min(99, count + incomingNewMsgs.length));
         }
       }
     } catch {
@@ -956,7 +965,7 @@ export default function MessagesScreen() {
     } finally {
       isPollingRef.current = false;
     }
-  }, [flushMessageState, prioritizeThreadLatest]);
+  }, [flushMessageState, prioritizeThreadLatest, user?.id]);
 
     const openConversation = useCallback((conv: Conversation) => {
     const conversationId = Number(conv.id);
@@ -2112,9 +2121,9 @@ export default function MessagesScreen() {
           </View>
         }
         renderItem={({ item }) => {
-          const isUnread = !!item.unread && item.unread > 0;
-          const unreadLabel = Number(item.unread ?? 0) > 99 ? '99+' : String(item.unread ?? 0);
           const sentByMe = Number(item.last_sender_id) === Number(user?.id);
+          const isUnread = !sentByMe && !!item.unread && item.unread > 0;
+          const unreadLabel = Number(item.unread ?? 0) > 99 ? '99+' : String(item.unread ?? 0);
           const presenceStatus = inferPresenceStatus(item);
           const presence = presenceCopy(presenceStatus);
           const avatarUri = getConversationAvatarUri(item);

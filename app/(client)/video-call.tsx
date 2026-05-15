@@ -69,6 +69,9 @@ type SignalPayload = {
   balance_checkout_url?: string | null;
 };
 
+const CALL_TIME_WARNING_MINUTES = 10;
+const CALL_TIME_FINAL_WARNING_MINUTES = 5;
+
 let cachedWebRtc: WebRtcModule | null = null;
 
 function serializeSessionDescription(description: any) {
@@ -243,7 +246,7 @@ export default function VideoCallScreen() {
   const [fullScreen, setFullScreen] = useState(false);
   const [nowTick, setNowTick] = useState(Date.now());
   const [callExpired, setCallExpired] = useState(false);
-  const [timeLimitWarned, setTimeLimitWarned] = useState(false);
+  const [timeLimitWarnedAt, setTimeLimitWarnedAt] = useState<Array<number>>([]);
   const [postCallModalVisible, setPostCallModalVisible] = useState(false);
   const [postCallRating, setPostCallRating] = useState(5);
   const [postCallComment, setPostCallComment] = useState('');
@@ -266,7 +269,7 @@ export default function VideoCallScreen() {
       ? 'ended'
       : remainingMs <= 60 * 1000
         ? 'danger'
-        : remainingMs <= 5 * 60 * 1000
+        : remainingMs <= CALL_TIME_FINAL_WARNING_MINUTES * 60 * 1000
           ? 'warning'
           : 'normal';
   const callPartnerName = useMemo(() => {
@@ -1011,15 +1014,23 @@ export default function VideoCallScreen() {
   useEffect(() => {
     if (!callWindow || callExpired) return;
 
-    if (remainingMs != null && remainingMs <= 5 * 60 * 1000 && remainingMs > 0 && !timeLimitWarned) {
-      setTimeLimitWarned(true);
-      showCallBanner('5 minutes left in this consultation.', 'time-outline');
+    if (remainingMs != null && remainingMs > 0) {
+      const warningMinutes = remainingMs <= CALL_TIME_FINAL_WARNING_MINUTES * 60 * 1000
+        ? CALL_TIME_FINAL_WARNING_MINUTES
+        : remainingMs <= CALL_TIME_WARNING_MINUTES * 60 * 1000
+          ? CALL_TIME_WARNING_MINUTES
+          : null;
+
+      if (warningMinutes && !timeLimitWarnedAt.includes(warningMinutes)) {
+        setTimeLimitWarnedAt((current) => [...current, warningMinutes]);
+        showCallBanner(`${warningMinutes} minutes left in this consultation.`, 'time-outline');
+      }
     }
 
     if (remainingMs != null && remainingMs <= 0) {
       endCallForTimeLimit();
     }
-  }, [callWindow?.endMs, remainingMs, callExpired, timeLimitWarned]);
+  }, [callWindow?.endMs, remainingMs, callExpired, timeLimitWarnedAt]);
 
   useEffect(() => {
     if (!metadata || metadata.can_join || isLawyer || !consultationIdNumber) return;

@@ -12,7 +12,7 @@ import {
   TextInput,
   BackHandler,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -61,6 +61,12 @@ type CaseDocumentAsset = {
   name: string;
   mimeType?: string | null;
   size?: number | null;
+};
+
+type TimeBookedPromptState = {
+  visible: boolean;
+  selectedTimeLabel: string;
+  recommendations: AvailabilitySlot[];
 };
 
 function pad(value: number) {
@@ -123,6 +129,41 @@ function firstSlotTime(slots: AvailabilitySlot[]) {
     if (normalized) return normalized;
   }
   return '';
+}
+
+function formatSlotTimeLabel(timeKey: string) {
+  const normalized = normalizeTimeValue(timeKey);
+  if (!normalized) return 'that time';
+
+  return new Date(`2000-01-01T${normalized}:00`).toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' });
+}
+
+function getRecommendedSlots(slots: AvailabilitySlot[], selectedTime: string, limit = 3) {
+  const selected = normalizeTimeValue(selectedTime);
+  const selectedMinutes = (() => {
+    const [hour, minute] = selected.split(':').map(Number);
+    return Number.isFinite(hour) && Number.isFinite(minute) ? hour * 60 + minute : -1;
+  })();
+
+  const normalizedSlots = slots
+    .map((slot) => {
+      const time = normalizeTimeValue(slot.time);
+      const [hour, minute] = time.split(':').map(Number);
+      return {
+        ...slot,
+        time,
+        minutes: Number.isFinite(hour) && Number.isFinite(minute) ? hour * 60 + minute : -1,
+      };
+    })
+    .filter((slot) => slot.time && slot.minutes >= 0)
+    .sort((a, b) => a.minutes - b.minutes);
+
+  const uniqueSlots = [...normalizedSlots]
+    .filter((slot, index, source) => source.findIndex((candidate) => candidate.time === slot.time) === index);
+  const afterSelected = uniqueSlots.filter((slot) => slot.minutes > selectedMinutes);
+  return [...afterSelected, ...uniqueSlots]
+    .filter((slot, index, source) => source.findIndex((candidate) => candidate.time === slot.time) === index)
+    .slice(0, limit);
 }
 
 function getTimeParts(timeKey: string) {
@@ -235,6 +276,20 @@ function isMissingAvailabilityRoute(error: any) {
   const status = error?.response?.status;
   const message = String(error?.response?.data?.message || error?.response?.data?.error || error?.message || '').toLowerCase();
   return status === 404 && message.includes('availability');
+}
+
+function confirmClientBookingConflict() {
+  return new Promise<boolean>((resolve) => {
+    Alert.alert(
+      'Schedule Conflict',
+      `${CLIENT_DOUBLE_BOOKING_MESSAGE}\n\nDo you want to continue booking this consultation anyway?`,
+      [
+        { text: 'Not Now', style: 'cancel', onPress: () => resolve(false) },
+        { text: 'Continue', style: 'destructive', onPress: () => resolve(true) },
+      ],
+      { cancelable: true, onDismiss: () => resolve(false) }
+    );
+  });
 }
 
 function extractCheckoutUrl(source: any): string | undefined {
@@ -365,6 +420,7 @@ async function waitForPaymentResult(paymentId: number) {
 export default function LawyerDetailScreen() {
   const router = useRouter();
   const navigation = useNavigation();
+  const insets = useSafeAreaInsets();
   const { id, openBook, returnTo } = useLocalSearchParams<{ id: string; openBook?: string; returnTo?: string }>();
   const { user } = useAuth();
   const launchedFromBookNow = openBook === '1';
@@ -397,6 +453,11 @@ export default function LawyerDetailScreen() {
   const [availabilityLoading, setAvailabilityLoading] = useState(false);
   const [availabilityError, setAvailabilityError] = useState('');
   const [nowTick, setNowTick] = useState(Date.now());
+  const [timeBookedPrompt, setTimeBookedPrompt] = useState<TimeBookedPromptState>({
+    visible: false,
+    selectedTimeLabel: '',
+    recommendations: [],
+  });
 
   const bookingReturnPath = useMemo(() => {
     const target = `/lawyer/${id}?openBook=1&returnTo=${encodeURIComponent(resolvedReturnTarget)}`;
@@ -616,7 +677,31 @@ export default function LawyerDetailScreen() {
       Alert.alert('Invalid Time', `Please choose a time at least ${MIN_BOOKING_LEAD_MINUTES} minutes from now.`);
       return;
     }
+
+    if (filteredSlots.length > 0 && !hasSlotTime(filteredSlots, bookTime)) {
+      showLawyerTimeBookedAlert(filteredSlots);
+      return;
+    }
+
     setDateTimePickerVisible(false);
+  }
+
+  function showLawyerTimeBookedAlert(availableSlots: AvailabilitySlot[]) {
+    const recommendations = getRecommendedSlots(availableSlots, bookTime);
+    setTimeBookedPrompt({
+      visible: true,
+      selectedTimeLabel: formatSlotTimeLabel(bookTime),
+      recommendations,
+    });
+  }
+
+  function closeTimeBookedPrompt() {
+    setTimeBookedPrompt((current) => ({ ...current, visible: false }));
+  }
+
+  function useRecommendedBookedTime(slot: AvailabilitySlot) {
+    setBookTime(normalizeTimeValue(slot.time));
+    closeTimeBookedPrompt();
   }
 
   async function startConversation() {
@@ -741,11 +826,34 @@ export default function LawyerDetailScreen() {
     let submittedConsultationCode = '';
 
     try {
+      let latestAvailableSlots = filteredSlots;
+      try {
+        const { data: latestAvailabilityData } = await clientApi.lawyerAvailability(Number(id), {
+          month: formatMonthValue(scheduled),
+          duration_minutes: duration,
+          date: dateStr,
+        });
+        const latestSlots: AvailabilitySlot[] = Array.isArray(latestAvailabilityData?.slots) ? latestAvailabilityData.slots : [];
+        latestAvailableSlots = latestSlots.filter((slot) => {
+          const slotTime = normalizeTimeValue(slot.time);
+          if (!slotTime) return false;
+          if (dateStr !== todayKey) return true;
+          return new Date(`${dateStr}T${slotTime}:00`).getTime() >= getMinimumBookableTime().getTime();
+        });
+      } catch {
+        latestAvailableSlots = filteredSlots;
+      }
+
+      if (!hasSlotTime(latestAvailableSlots, timeStr)) {
+        showLawyerTimeBookedAlert(latestAvailableSlots);
+        return;
+      }
+
       const existingConsultationsResponse = await clientApi.consultations();
       const existingConsultations = extractConsultationList(existingConsultationsResponse?.data);
       if (hasClientBookingConflict(existingConsultations, scheduled, duration)) {
-        Alert.alert('Schedule Conflict', CLIENT_DOUBLE_BOOKING_MESSAGE);
-        return;
+        const shouldContinue = await confirmClientBookingConflict();
+        if (!shouldContinue) return;
       }
 
       const bookingPayload = {
@@ -1038,6 +1146,11 @@ export default function LawyerDetailScreen() {
     ? new Date(`2000-01-01T${bookTime}:00`).toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' })
     : 'No time selected';
   const selectedTimeParts = getTimeParts(bookTime || '09:00');
+  const visibleTimeBookedRecommendations = timeBookedPrompt.recommendations.filter((slot, index, source) => {
+    const time = normalizeTimeValue(slot.time);
+    if (!time) return false;
+    return source.findIndex((candidate) => normalizeTimeValue(candidate.time) === time) === index;
+  });
   const isPickedTimeUnavailable = (next: Partial<{ hour12: number; minute: number; meridiem: 'AM' | 'PM' }>) => {
     if (!bookDate) return true;
     const current = getTimeParts(bookTime || '09:00');
@@ -1464,12 +1577,61 @@ export default function LawyerDetailScreen() {
       </Modal>
 
       <Modal
+        visible={timeBookedPrompt.visible}
+        transparent
+        animationType="fade"
+        onRequestClose={closeTimeBookedPrompt}
+      >
+        <View style={styles.timeBookedOverlay}>
+          <View style={styles.timeBookedCard}>
+            <View style={styles.timeBookedIconWrap}>
+              <Ionicons name="alert-circle" size={30} color="#B45309" />
+            </View>
+            <Text style={styles.timeBookedTitle}>Time Already Booked</Text>
+            <Text style={styles.timeBookedCopy}>
+              This lawyer is already booked at <Text style={styles.timeBookedStrong}>{timeBookedPrompt.selectedTimeLabel}</Text>. Please choose another available time.
+            </Text>
+
+            <View style={styles.timeBookedDivider} />
+
+            <View style={styles.timeBookedRecommendationHeader}>
+              <Ionicons name="time-outline" size={16} color={Colors.primary} />
+              <Text style={styles.timeBookedRecommendationTitle}>
+                {visibleTimeBookedRecommendations.length ? 'Recommended times' : 'No times available'}
+              </Text>
+            </View>
+
+            {visibleTimeBookedRecommendations.length ? (
+              <View style={styles.timeBookedChipGrid}>
+                {visibleTimeBookedRecommendations.map((slot, index) => (
+                  <TouchableOpacity
+                    key={`booked-reco-${normalizeTimeValue(slot.time)}-${index}`}
+                    style={styles.timeBookedChip}
+                    onPress={() => useRecommendedBookedTime(slot)}
+                  >
+                    <Ionicons name="checkmark-circle-outline" size={15} color="#FFFFFF" />
+                    <Text style={styles.timeBookedChipText}>{slot.label || formatSlotTimeLabel(slot.time)}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : (
+              <Text style={styles.timeBookedEmptyText}>This date may be full. Pick another date to see more available slots.</Text>
+            )}
+
+            <TouchableOpacity style={styles.timeBookedSecondaryBtn} onPress={closeTimeBookedPrompt}>
+              <Text style={styles.timeBookedSecondaryText}>Choose Another Time</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
         visible={dateTimePickerVisible}
         transparent
         animationType="fade"
         onRequestClose={() => setDateTimePickerVisible(false)}
       >
-        <View style={styles.datePickerOverlay}>
+        <View style={[styles.datePickerOverlay, { paddingTop: Math.max(18, insets.top + 8), paddingBottom: Math.max(22, insets.bottom + 18) }]}>
           <View style={styles.datePickerCard}>
             <View style={styles.datePickerHeader}>
               <Text style={styles.datePickerTitle}>Date & Time</Text>
@@ -1651,7 +1813,7 @@ export default function LawyerDetailScreen() {
               </View>
             </View>
 
-            <TouchableOpacity style={styles.datePickerDoneBtn} onPress={closeDateTimePickerIfValid}>
+            <TouchableOpacity style={[styles.datePickerDoneBtn, { marginBottom: Math.max(6, insets.bottom * 0.35) }]} onPress={closeDateTimePickerIfValid}>
               <Text style={styles.datePickerDoneText}>Done</Text>
             </TouchableOpacity>
           </View>
@@ -1804,10 +1966,12 @@ const styles = StyleSheet.create({
   },
   datePickerCard: {
     width: '100%',
-    maxHeight: '88%',
+    maxHeight: '84%',
     backgroundColor: Colors.card,
     borderRadius: 18,
-    padding: 14,
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 8,
     borderWidth: 1,
     borderColor: Colors.border,
   },
@@ -1823,13 +1987,13 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   datePickerBody: {
-    gap: 14,
+    gap: 10,
   },
   datePickerCalendar: {
     borderWidth: 1,
     borderColor: Colors.border,
     borderRadius: 14,
-    padding: 12,
+    padding: 10,
     backgroundColor: '#FFFFFF',
   },
   datePickerQuickRow: {
@@ -1846,7 +2010,7 @@ const styles = StyleSheet.create({
   datePickerTime: {
     flexDirection: 'row',
     gap: 8,
-    height: 210,
+    height: 178,
     borderWidth: 1,
     borderColor: Colors.border,
     borderRadius: 14,
@@ -1861,7 +2025,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   timeOption: {
-    minHeight: 42,
+    minHeight: 38,
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1886,7 +2050,7 @@ const styles = StyleSheet.create({
     color: Colors.textLight,
   },
   datePickerDoneBtn: {
-    marginTop: 14,
+    marginTop: 12,
     minHeight: 46,
     borderRadius: 12,
     backgroundColor: Colors.primary,
@@ -2027,6 +2191,115 @@ const styles = StyleSheet.create({
   uploadMetaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 },
   uploadHintText: { fontSize: 12, color: Colors.textMuted, marginTop: 8 },
   uploadRemoveText: { fontSize: 12, fontWeight: '700', color: Colors.primary, marginTop: 8 },
+  timeBookedOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.58)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 22,
+  },
+  timeBookedCard: {
+    width: '100%',
+    maxWidth: 420,
+    borderRadius: 24,
+    backgroundColor: '#FFFFFF',
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#FCD9A3',
+    shadowColor: '#111827',
+    shadowOffset: { width: 0, height: 14 },
+    shadowOpacity: 0.2,
+    shadowRadius: 24,
+    elevation: 14,
+  },
+  timeBookedIconWrap: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#FBBF24',
+    marginBottom: 12,
+  },
+  timeBookedTitle: {
+    color: '#111827',
+    fontSize: 21,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  timeBookedCopy: {
+    color: '#536176',
+    fontSize: 14,
+    lineHeight: 21,
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  timeBookedStrong: {
+    color: '#111827',
+    fontWeight: '900',
+  },
+  timeBookedDivider: {
+    height: 1,
+    backgroundColor: '#E7ECF4',
+    marginVertical: 16,
+  },
+  timeBookedRecommendationHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    marginBottom: 10,
+  },
+  timeBookedRecommendationTitle: {
+    color: Colors.primary,
+    fontSize: 13,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  timeBookedChipGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  timeBookedChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    paddingHorizontal: 13,
+    paddingVertical: 10,
+    backgroundColor: Colors.primary,
+  },
+  timeBookedChipText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  timeBookedEmptyText: {
+    color: Colors.textMuted,
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: 'center',
+  },
+  timeBookedSecondaryBtn: {
+    minHeight: 46,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 16,
+    backgroundColor: '#EEF2F7',
+    borderWidth: 1,
+    borderColor: '#D8E0EC',
+  },
+  timeBookedSecondaryText: {
+    color: Colors.text,
+    fontSize: 14,
+    fontWeight: '900',
+  },
   confirmBtn: {
     marginTop: 14,
     backgroundColor: Colors.primary,
