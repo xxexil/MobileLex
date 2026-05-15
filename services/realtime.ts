@@ -31,6 +31,8 @@ type ConsultationEventPayload = {
     lawyer_name?: string;
     balance_payment_id?: number;
     balance_payment_status?: string;
+    can_join_video?: boolean;
+    lawyer_in_video_call?: boolean;
   };
   changes?: string[];
 };
@@ -64,6 +66,14 @@ type MessageEventPayload = {
   attachment_url?: string | null;
   attachment_name?: string | null;
   attachment_type?: string | null;
+};
+
+type FirmApplicationEventPayload = {
+  application?: Record<string, any>;
+  lawyer?: Record<string, any>;
+  accepted_firm?: Record<string, any>;
+  accepted_firm_name?: string;
+  message?: string;
 };
 
 export function isReverbConfigured() {
@@ -162,6 +172,26 @@ export function subscribeUserPaymentEvents(
   return () => {
     channel.stopListening('.PaymentStatusUpdated');
     echo.leave(`private-user.${userId}.payments`);
+  };
+}
+
+export function subscribeUserFirmApplicationEvents(
+  echo: Echo<any>,
+  userId: number,
+  onAcceptedElsewhere: (payload: FirmApplicationEventPayload) => void
+) {
+  const channel = echo.private(`user.${userId}.firm-applications`)
+    .listen('.LawFirmApplicationAcceptedElsewhere', (payload: FirmApplicationEventPayload) => {
+      onAcceptedElsewhere(payload);
+    })
+    .listen('.FirmApplicationAcceptedElsewhere', (payload: FirmApplicationEventPayload) => {
+      onAcceptedElsewhere(payload);
+    });
+
+  return () => {
+    channel.stopListening('.LawFirmApplicationAcceptedElsewhere');
+    channel.stopListening('.FirmApplicationAcceptedElsewhere');
+    echo.leave(`private-user.${userId}.firm-applications`);
   };
 }
 

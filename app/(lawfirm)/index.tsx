@@ -23,6 +23,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNotifications } from '@/context/notifications';
 import { resolveStorageUrl } from '@/services/endpoints';
 import DashboardPopupBanner from '@/components/DashboardPopupBanner';
+import {
+  buildAcceptedElsewhereActivity,
+  extractApplicationList,
+  getAcceptedFirmName,
+  isAcceptedElsewhereApplication,
+} from '@/utils/firmApplications';
 import Svg, { Circle, Line, Polyline } from 'react-native-svg';
 
 const NOTIF_SEEN_KEY = 'lawfirm_notifications_seen_at';
@@ -144,7 +150,7 @@ function SectionHeader({ title, badge, action, onAction }: { title: string; badg
 export default function LawFirmDashboard() {
   const router = useRouter();
   const { user } = useAuth();
-  const { unreadActivityCount } = useNotifications();
+  const { addActivity, unreadActivityCount, triggerLawFirmUnreadRefresh } = useNotifications();
   const insets = useSafeAreaInsets();
 
   const [dashboard, setDashboard] = useState<any>(null);
@@ -162,6 +168,7 @@ export default function LawFirmDashboard() {
   const notifPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const unreadMessagesRef = useRef(0);
   const consultationSeenAtRef = useRef(0);
+  const acceptedElsewhereNotifiedRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     let active = true;
@@ -242,7 +249,16 @@ export default function LawFirmDashboard() {
 
     if (appsRes.status === 'fulfilled') {
       const p = appsRes.value?.data;
-      setApplications(Array.isArray(p) ? p : []);
+      const nextApplications = extractApplicationList(p);
+      nextApplications
+        .filter(isAcceptedElsewhereApplication)
+        .forEach((application) => {
+          const activity = buildAcceptedElsewhereActivity(application);
+          if (acceptedElsewhereNotifiedRef.current.has(activity.id)) return;
+          acceptedElsewhereNotifiedRef.current.add(activity.id);
+          addActivity(activity);
+        });
+      setApplications(nextApplications);
     } else setApplications([]);
 
     if (earningsRes.status === 'fulfilled') setEarnings(earningsRes.value?.data ?? null);
@@ -250,7 +266,7 @@ export default function LawFirmDashboard() {
 
     setLoading(false);
     setRefreshing(false);
-  }, [loading]);
+  }, [addActivity, loading]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -376,6 +392,7 @@ export default function LawFirmDashboard() {
           try {
             await lawFirmApi.acceptApplication(appId);
             setApplications((prev) => prev.filter((a) => a.id !== appId));
+            triggerLawFirmUnreadRefresh();
             Alert.alert('Accepted', `${lawyerName} has been added to your team.`);
             load();
           } catch (err: any) {
@@ -398,6 +415,7 @@ export default function LawFirmDashboard() {
           try {
             await lawFirmApi.rejectApplication(appId);
             setApplications((prev) => prev.filter((a) => a.id !== appId));
+            triggerLawFirmUnreadRefresh();
           } catch (err: any) {
             Alert.alert('Error', err?.response?.data?.message ?? 'Failed to reject application.');
           } finally {
@@ -726,6 +744,8 @@ export default function LawFirmDashboard() {
             applications.map((app, idx) => {
               const lawyer = app?.lawyer ?? {};
               const isActioning = actioningId === app.id;
+              const acceptedElsewhere = isAcceptedElsewhereApplication(app);
+              const acceptedFirmName = getAcceptedFirmName(app);
               return (
                 <View key={String(app.id ?? idx)} style={[styles.webAppRow, idx > 0 && styles.appRowDivider]}>
                   <View style={styles.webAppAvatar}>
@@ -747,15 +767,23 @@ export default function LawFirmDashboard() {
                     {app.message ? (
                       <Text style={styles.webAppMessage} numberOfLines={2}>"{app.message}"</Text>
                     ) : null}
+                    {acceptedElsewhere ? (
+                      <View style={styles.webAcceptedElsewhereNotice}>
+                        <Ionicons name="information-circle-outline" size={13} color="#B45309" />
+                        <Text style={styles.webAcceptedElsewhereText} numberOfLines={2}>
+                          Already accepted to {acceptedFirmName || 'another law firm'}.
+                        </Text>
+                      </View>
+                    ) : null}
                     <TouchableOpacity style={styles.appDocsBtn} onPress={() => router.push('/(lawfirm)/team')}>
                       <Ionicons name="document-text" size={13} color={RoleColors.lawFirm.shell} />
                       <Text style={styles.appDocsText}>Review Docs</Text>
                     </TouchableOpacity>
                     <View style={styles.webAppActions}>
                       <TouchableOpacity
-                        style={[styles.webAcceptBtn, isActioning && styles.btnDisabled]}
+                        style={[styles.webAcceptBtn, (isActioning || acceptedElsewhere) && styles.btnDisabled]}
                         onPress={() => handleAccept(app.id, lawyer.name || 'this lawyer')}
-                        disabled={isActioning}
+                        disabled={isActioning || acceptedElsewhere}
                       >
                         {isActioning
                           ? <ActivityIndicator size="small" color="#fff" />
@@ -1582,6 +1610,8 @@ const styles = StyleSheet.create({
   webAppAvatar: { width: 46, height: 46, borderRadius: 23, backgroundColor: RoleColors.lawFirm.shell, alignItems: 'center', justifyContent: 'center', marginTop: 8 },
   webAppName: { color: RoleColors.lawFirm.shell, fontWeight: '900', fontSize: 16, marginBottom: 6 },
   webAppMessage: { color: '#60748A', fontSize: 12, fontStyle: 'italic', backgroundColor: '#F8FAFC', borderRadius: 7, paddingHorizontal: 10, paddingVertical: 7, marginBottom: 8, lineHeight: 17 },
+  webAcceptedElsewhereNotice: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#FFFBEB', borderColor: '#FCD34D', borderWidth: 1, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 7, marginBottom: 8 },
+  webAcceptedElsewhereText: { flex: 1, color: '#92400E', fontSize: 12, fontWeight: '800', lineHeight: 16 },
   appDocsBtn: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderColor: '#BFD0EA', backgroundColor: '#EEF4FF', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7, marginBottom: 10 },
   appDocsText: { color: RoleColors.lawFirm.shell, fontSize: 12, fontWeight: '800' },
   webAppActions: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },

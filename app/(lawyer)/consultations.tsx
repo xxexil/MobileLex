@@ -34,6 +34,17 @@ const STATUS_SUMMARY = [
   { key: 'expired', label: 'Expired', icon: 'time-outline', color: Colors.textMuted },
 ];
 
+function normalizeConsultationType(type?: string) {
+  return String(type || 'video').trim().toLowerCase().replace(/[_\s]+/g, '-');
+}
+
+function getConsultationTypeMeta(type?: string) {
+  const normalized = normalizeConsultationType(type);
+  if (normalized === 'phone') return { type: normalized, icon: 'call-outline', label: 'Phone' };
+  if (normalized === 'in-person') return { type: normalized, icon: 'business-outline', label: 'In-person' };
+  return { type: 'video', icon: 'videocam-outline', label: 'Video' };
+}
+
 export default function LawyerConsultations() {
   const { user, token } = useAuth();
   const params = useLocalSearchParams<{ consultationId?: string; fromNotification?: string }>();
@@ -224,6 +235,11 @@ export default function LawyerConsultations() {
   };
 
   function confirmAndJoinCall(item: any) {
+    if (normalizeConsultationType(item.type) !== 'video') {
+      Alert.alert('Video Unavailable', 'This consultation is not a video session.');
+      return;
+    }
+
     const scheduledTime = new Date(item.scheduled_at).getTime();
     const now = Date.now();
     const windowMinutes = 10; // Only allow joining within 10 minutes before and after scheduled time
@@ -295,8 +311,31 @@ export default function LawyerConsultations() {
     );
   }
 
+  function openPhoneSession(item: any) {
+    const phoneNumber = String(item?.client?.phone || item?.client_phone || item?.phone || '').trim();
+    if (!phoneNumber) {
+      Alert.alert('Phone Number Unavailable', 'No client phone number is attached to this consultation yet.');
+      return;
+    }
+
+    void Linking.openURL(`tel:${phoneNumber}`).catch(() => {
+      Alert.alert('Call Failed', 'Could not open the phone dialer on this device.');
+    });
+  }
+
+  function showInPersonSession(item: any) {
+    const location = String(item?.meeting_location || item?.location || item?.address || '').trim();
+    Alert.alert(
+      'In-person Session',
+      location
+        ? `Meeting location:\n\n${location}`
+        : 'This is an in-person consultation. No meeting location is attached yet.',
+    );
+  }
+
   function renderItem({ item }: { item: any }) {
     const badge = getBadge(item.status);
+    const typeMeta = getConsultationTypeMeta(item.type);
     return (
       <View style={[styles.card, Number(item.id) === targetConsultationId && styles.cardHighlighted]}>
         <View style={styles.cardTop}>
@@ -311,8 +350,8 @@ export default function LawyerConsultations() {
           <Text style={styles.meta}>{new Date(item.scheduled_at).toLocaleString()}</Text>
         </View>
         <View style={styles.row}>
-          <Ionicons name="videocam-outline" size={13} color={Colors.textMuted} />
-          <Text style={styles.meta}>{item.type} · {item.duration_minutes} min</Text>
+          <Ionicons name={typeMeta.icon} size={13} color={Colors.textMuted} />
+          <Text style={styles.meta}>{typeMeta.label} · {item.duration_minutes} min</Text>
         </View>
         <Text style={styles.price}>₱{item.price?.toLocaleString()}</Text>
 
@@ -353,7 +392,9 @@ export default function LawyerConsultations() {
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
                 <>
-                  <Ionicons name="checkmark-outline" size={15} color="#fff" />
+                  <View style={styles.actionCheckIcon}>
+                    <Ionicons name="checkmark-outline" size={14} color={Colors.success} />
+                  </View>
                   <Text style={styles.acceptBtnText}>Accept</Text>
                 </>
               )}
@@ -363,13 +404,31 @@ export default function LawyerConsultations() {
 
         {item.status === 'upcoming' && (
           <View style={{ marginTop: 10, flexDirection: 'row', gap: 8 }}>
-            <TouchableOpacity
-              style={[styles.completeBtn, { flex: 1 }]}
-              onPress={() => confirmAndJoinCall(item)}
-            >
-              <Ionicons name="videocam-outline" size={16} color="#fff" />
-              <Text style={styles.completeBtnText}>Join Call</Text>
-            </TouchableOpacity>
+            {typeMeta.type === 'video' ? (
+              <TouchableOpacity
+                style={[styles.completeBtn, { flex: 1 }]}
+                onPress={() => confirmAndJoinCall(item)}
+              >
+                <Ionicons name="videocam-outline" size={16} color="#fff" />
+                <Text style={styles.completeBtnText}>Join Call</Text>
+              </TouchableOpacity>
+            ) : typeMeta.type === 'phone' ? (
+              <TouchableOpacity
+                style={[styles.completeBtn, { flex: 1 }]}
+                onPress={() => openPhoneSession(item)}
+              >
+                <Ionicons name="call-outline" size={16} color="#fff" />
+                <Text style={styles.completeBtnText}>Call Client</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={[styles.completeBtn, { flex: 1 }]}
+                onPress={() => showInPersonSession(item)}
+              >
+                <Ionicons name="business-outline" size={16} color="#fff" />
+                <Text style={styles.completeBtnText}>Session Details</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity
               style={[styles.completeBtn, { flex: 1, backgroundColor: Colors.success }]}
               onPress={() => Alert.alert('Mark Complete?', 'Mark this consultation as completed?', [
@@ -378,7 +437,9 @@ export default function LawyerConsultations() {
               ])}
               disabled={actioning === item.id}
             >
-              <Ionicons name="checkmark-circle-outline" size={16} color="#fff" />
+              <View style={styles.actionCheckIcon}>
+                <Ionicons name="checkmark-circle-outline" size={14} color={Colors.success} />
+              </View>
               <Text style={styles.completeBtnText}>Complete</Text>
             </TouchableOpacity>
           </View>
@@ -764,6 +825,14 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   acceptBtnText: { color: '#fff', fontWeight: '800', fontSize: 13 },
+  actionCheckIcon: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   completeBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: Colors.success, borderRadius: 8, paddingVertical: 10, marginTop: 12 },
   completeBtnText: { color: '#fff', fontWeight: '700', fontSize: 13 },
   confirmOverlay: {

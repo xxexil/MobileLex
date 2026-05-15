@@ -2,11 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Platform, Pressable, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors, RoleColors } from '@/constants/theme';
 import { formatPhp } from '@/constants/currency';
 import { useAuth } from '@/context/auth';
 import { adminApi } from '@/services/api';
 import { createReverbEcho, isReverbConfigured } from '@/services/realtime';
+
+const WEB_ADMIN_NAVY = '#1E2D4D';
+const WEB_ADMIN_NAVY_DARK = '#162240';
+const WEB_ADMIN_GOLD = '#B5860D';
+const WEB_ADMIN_BG = '#F0F2F5';
 
 export default function AdminHomeScreen() {
   const router = useRouter();
@@ -166,18 +172,18 @@ export default function AdminHomeScreen() {
 
   if (loading) {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color={RoleColors.admin.accent} />
-      </View>
+      <SafeAreaView style={styles.center}>
+        <ActivityIndicator size="large" color={WEB_ADMIN_GOLD} />
+      </SafeAreaView>
     );
   }
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <ScrollView
         style={styles.container}
         contentContainerStyle={styles.content}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[RoleColors.admin.accent]} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[WEB_ADMIN_GOLD]} />}
       >
       <View style={styles.webAdminShell}>
         <View style={styles.webBrandRow}>
@@ -185,8 +191,8 @@ export default function AdminHomeScreen() {
             <Ionicons name="shield" size={24} color="#FFFFFF" />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.webBrandTitle}>LexConnect</Text>
-            <Text style={styles.webBrandSub}>ADMIN PORTAL</Text>
+            <Text style={styles.webBrandTitle}>Lex<Text style={styles.webBrandTitleAccent}>Connect</Text></Text>
+            <Text style={styles.webBrandSub}>Smart Legal Services Platform</Text>
           </View>
           <View style={styles.webAdminBadge}>
             <Ionicons name="shield" size={13} color="#FFFFFF" />
@@ -200,7 +206,7 @@ export default function AdminHomeScreen() {
           </View>
           <View>
             <Text style={styles.webAdminName}>{displayName}</Text>
-            <Text style={styles.webAdminRole}>Super Admin</Text>
+            <Text style={styles.webAdminRole}>Administrator Console</Text>
           </View>
         </View>
       </View>
@@ -216,12 +222,12 @@ export default function AdminHomeScreen() {
 
       <View style={styles.webPageHeader}>
         <View>
-          <Text style={styles.webPageTitle}>Dashboard</Text>
+          <Text style={styles.webPageTitle}>Admin Dashboard</Text>
           <Text style={styles.webPageDate}>{todayLabel}</Text>
         </View>
         {isPreview ? (
           <View style={styles.webPreviewPill}>
-            <Ionicons name="flask-outline" size={13} color={RoleColors.admin.accent} />
+            <Ionicons name="flask-outline" size={13} color={WEB_ADMIN_GOLD} />
             <Text style={styles.webPreviewText}>Preview</Text>
           </View>
         ) : null}
@@ -229,7 +235,7 @@ export default function AdminHomeScreen() {
 
       {isPreview && (
         <View style={styles.previewBanner}>
-          <Ionicons name="information-circle-outline" size={16} color={RoleColors.admin.shell} />
+          <Ionicons name="information-circle-outline" size={16} color={WEB_ADMIN_NAVY} />
           <Text style={styles.previewBannerText}>Preview Data: values shown here are mock data for local testing.</Text>
         </View>
       )}
@@ -261,7 +267,7 @@ export default function AdminHomeScreen() {
         {extraStats.map((item) => (
           <View key={item.label} style={styles.webMiniCard}>
             <View style={styles.webMiniIcon}>
-              <Ionicons name={item.icon} size={19} color={RoleColors.admin.shell} />
+              <Ionicons name={item.icon} size={19} color={WEB_ADMIN_NAVY} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.webMiniValue} numberOfLines={1}>{item.value}</Text>
@@ -335,7 +341,7 @@ export default function AdminHomeScreen() {
           </View>
         </View>
       </Modal>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -354,14 +360,14 @@ function consultationStatusTone(statusRaw: unknown) {
   if (status.includes('cancel')) return { bg: '#FEE2E2', text: '#B91C1C', label: 'Cancelled' };
   if (status.includes('upcoming')) return { bg: '#DBEAFE', text: '#1D4ED8', label: 'Upcoming' };
   if (status.includes('pending')) return { bg: '#FEF3C7', text: '#B45309', label: 'Pending' };
-  return { bg: '#EDE9FE', text: RoleColors.admin.accent, label: String(statusRaw || 'Status') };
+  return { bg: '#FFF5DC', text: WEB_ADMIN_GOLD, label: String(statusRaw || 'Status') };
 }
 
 function WebPanelHeader({ title, icon, onViewAll }: { title: string; icon: any; onViewAll: () => void }) {
   return (
     <View style={styles.webPanelHeader}>
       <View style={styles.webPanelTitleRow}>
-        <Ionicons name={icon} size={18} color={RoleColors.admin.accent} />
+        <Ionicons name={icon} size={18} color={WEB_ADMIN_GOLD} />
         <Text style={styles.webPanelTitle}>{title}</Text>
       </View>
       <TouchableOpacity onPress={onViewAll}>
@@ -479,31 +485,37 @@ function AdminListCard({
 }
 
 const styles = StyleSheet.create({
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: RoleColors.admin.background },
-  container: { flex: 1, backgroundColor: RoleColors.admin.background },
-  content: { padding: 16, paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) + 16 : 16, paddingBottom: 124 },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: WEB_ADMIN_BG },
+  container: { flex: 1, backgroundColor: WEB_ADMIN_BG },
+  content: { padding: 16, paddingTop: 10, paddingBottom: 124 },
   webAdminShell: {
-    backgroundColor: RoleColors.admin.shell,
-    borderRadius: 20,
-    padding: 16,
+    backgroundColor: WEB_ADMIN_NAVY,
+    borderRadius: 16,
+    padding: 18,
     marginBottom: 12,
+    shadowColor: WEB_ADMIN_NAVY_DARK,
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 6,
   },
   webBrandRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   webBrandIcon: {
     width: 48,
     height: 48,
-    borderRadius: 14,
-    backgroundColor: RoleColors.admin.accent,
+    borderRadius: 12,
+    backgroundColor: WEB_ADMIN_GOLD,
     alignItems: 'center',
     justifyContent: 'center',
   },
   webBrandTitle: { color: '#FFFFFF', fontSize: 20, fontWeight: '900' },
-  webBrandSub: { color: '#98A2B3', fontSize: 12, fontWeight: '700', marginTop: 2, letterSpacing: 0.6 },
+  webBrandTitleAccent: { color: WEB_ADMIN_GOLD },
+  webBrandSub: { color: '#D7DEE9', fontSize: 12, fontWeight: '600', marginTop: 2 },
   webAdminBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
-    backgroundColor: RoleColors.admin.accent,
+    backgroundColor: WEB_ADMIN_GOLD,
     borderRadius: 999,
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -511,9 +523,9 @@ const styles = StyleSheet.create({
   webAdminBadgeText: { color: '#FFFFFF', fontWeight: '900', fontSize: 12 },
   webAdminCard: {
     marginTop: 18,
-    backgroundColor: '#33215F',
+    backgroundColor: '#162240',
     borderWidth: 1,
-    borderColor: '#6D36D8',
+    borderColor: 'rgba(181,134,13,0.42)',
     borderRadius: 12,
     padding: 14,
     flexDirection: 'row',
@@ -524,25 +536,25 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: RoleColors.admin.accent,
+    backgroundColor: WEB_ADMIN_GOLD,
     alignItems: 'center',
     justifyContent: 'center',
   },
   webAdminAvatarText: { color: '#FFFFFF', fontWeight: '900', fontSize: 16 },
   webAdminName: { color: '#FFFFFF', fontWeight: '900', fontSize: 15 },
-  webAdminRole: { color: '#B8B7C9', fontWeight: '700', fontSize: 12, marginTop: 2 },
+  webAdminRole: { color: '#D7DEE9', fontWeight: '700', fontSize: 12, marginTop: 2 },
   webNavScroll: { flexGrow: 0, marginHorizontal: -16, marginBottom: 14 },
   webNavRow: { paddingHorizontal: 16, gap: 8 },
   webNavChip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 7,
-    backgroundColor: RoleColors.admin.shell,
-    borderRadius: 999,
+    backgroundColor: WEB_ADMIN_NAVY,
+    borderRadius: 8,
     paddingHorizontal: 13,
     paddingVertical: 10,
   },
-  webNavChipActive: { backgroundColor: '#33215F', borderWidth: 1, borderColor: RoleColors.admin.accent },
+  webNavChipActive: { backgroundColor: WEB_ADMIN_GOLD, borderWidth: 1, borderColor: WEB_ADMIN_GOLD },
   webNavChipText: { color: '#C2C8D6', fontSize: 12, fontWeight: '800' },
   webNavChipTextActive: { color: '#FFFFFF' },
   webPageHeader: {
@@ -551,29 +563,28 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 14,
   },
-  webPageTitle: { color: '#1E2030', fontSize: 22, fontWeight: '900' },
+  webPageTitle: { color: WEB_ADMIN_NAVY, fontSize: 22, fontWeight: '900' },
   webPageDate: { color: '#8A94A6', fontSize: 13, fontWeight: '600', marginTop: 4 },
   webPreviewPill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
     borderRadius: 999,
-    backgroundColor: '#F5F0FF',
+    backgroundColor: '#FFF5DC',
     paddingHorizontal: 10,
     paddingVertical: 6,
   },
-  webPreviewText: { color: RoleColors.admin.accent, fontSize: 11, fontWeight: '900' },
+  webPreviewText: { color: WEB_ADMIN_GOLD, fontSize: 11, fontWeight: '900' },
   webStatsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 12 },
   webStatCard: {
     width: '48%',
-    minHeight: 116,
+    minHeight: 112,
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#E8EDF5',
+    borderColor: '#DEE2E6',
     padding: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 12,
     shadowColor: '#102042',
     shadowOpacity: 0.07,
@@ -581,14 +592,14 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 6 },
     elevation: 3,
   },
-  webStatIcon: { width: 50, height: 50, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
-  webStatValue: { color: RoleColors.admin.shell, fontSize: 27, fontWeight: '900' },
-  webStatLabel: { color: '#566174', fontSize: 12, fontWeight: '800', marginTop: 3, lineHeight: 16 },
+  webStatIcon: { width: 42, height: 42, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  webStatValue: { color: WEB_ADMIN_NAVY, fontSize: 27, fontWeight: '900' },
+  webStatLabel: { color: '#6C757D', fontSize: 12, fontWeight: '800', marginTop: 3, lineHeight: 16 },
   webStatusPanel: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#E8EDF5',
+    borderColor: '#DEE2E6',
     flexDirection: 'row',
     marginBottom: 12,
     overflow: 'hidden',
@@ -601,28 +612,28 @@ const styles = StyleSheet.create({
     borderRightColor: '#EEF2F7',
   },
   webStatusValue: { fontSize: 22, fontWeight: '900' },
-  webStatusLabel: { color: '#566174', fontSize: 12, fontWeight: '800', marginTop: 6 },
+  webStatusLabel: { color: '#6C757D', fontSize: 12, fontWeight: '800', marginTop: 6 },
   webMiniGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 12 },
   webMiniCard: {
     width: '48%',
     minHeight: 94,
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#E8EDF5',
+    borderColor: '#DEE2E6',
     padding: 14,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
   },
-  webMiniIcon: { width: 42, height: 42, borderRadius: 14, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' },
-  webMiniValue: { color: RoleColors.admin.shell, fontSize: 20, fontWeight: '900' },
-  webMiniLabel: { color: '#566174', fontSize: 12, fontWeight: '800', marginTop: 2 },
+  webMiniIcon: { width: 42, height: 42, borderRadius: 10, backgroundColor: '#F8F9FA', alignItems: 'center', justifyContent: 'center' },
+  webMiniValue: { color: WEB_ADMIN_NAVY, fontSize: 20, fontWeight: '900' },
+  webMiniLabel: { color: '#6C757D', fontSize: 12, fontWeight: '800', marginTop: 2 },
   webPanelCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#E8EDF5',
+    borderColor: '#DEE2E6',
     overflow: 'hidden',
   },
   webPanelHeader: {
@@ -635,8 +646,8 @@ const styles = StyleSheet.create({
     borderBottomColor: '#EEF2F7',
   },
   webPanelTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  webPanelTitle: { color: RoleColors.admin.shell, fontSize: 16, fontWeight: '900' },
-  webPanelAction: { color: RoleColors.admin.accent, fontSize: 12, fontWeight: '800' },
+  webPanelTitle: { color: WEB_ADMIN_NAVY, fontSize: 16, fontWeight: '900' },
+  webPanelAction: { color: WEB_ADMIN_GOLD, fontSize: 12, fontWeight: '800' },
   webEmptyText: { color: Colors.textMuted, fontSize: 13, fontWeight: '700', padding: 14 },
   webConsultRow: {
     flexDirection: 'row',
@@ -647,7 +658,7 @@ const styles = StyleSheet.create({
     borderBottomColor: '#F1F5F9',
     gap: 10,
   },
-  webConsultCode: { color: RoleColors.admin.shell, fontSize: 13, fontWeight: '900' },
+  webConsultCode: { color: WEB_ADMIN_NAVY, fontSize: 13, fontWeight: '900' },
   webConsultClient: { color: '#111827', fontSize: 14, fontWeight: '800', marginTop: 4 },
   webConsultLawyer: { color: '#667085', fontSize: 12, fontWeight: '700', marginTop: 2 },
   webStatusBadge: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 },
@@ -665,15 +676,15 @@ const styles = StyleSheet.create({
     width: 42,
     height: 42,
     borderRadius: 21,
-    backgroundColor: '#EDE9FE',
+    backgroundColor: '#FFF5DC',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  webUserAvatarText: { color: RoleColors.admin.accent, fontSize: 14, fontWeight: '900' },
-  webUserName: { color: RoleColors.admin.shell, fontSize: 14, fontWeight: '900' },
+  webUserAvatarText: { color: WEB_ADMIN_GOLD, fontSize: 14, fontWeight: '900' },
+  webUserName: { color: WEB_ADMIN_NAVY, fontSize: 14, fontWeight: '900' },
   webUserEmail: { color: '#8A94A6', fontSize: 12, fontWeight: '600', marginTop: 2 },
-  webRolePill: { borderRadius: 999, backgroundColor: '#F1EAFE', paddingHorizontal: 10, paddingVertical: 6 },
-  webRoleText: { color: RoleColors.admin.accent, fontSize: 11, fontWeight: '900', textTransform: 'capitalize' },
+  webRolePill: { borderRadius: 999, backgroundColor: '#FFF5DC', paddingHorizontal: 10, paddingVertical: 6 },
+  webRoleText: { color: WEB_ADMIN_GOLD, fontSize: 11, fontWeight: '900', textTransform: 'capitalize' },
   headerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 14 },
   avatar: {
     width: 54,

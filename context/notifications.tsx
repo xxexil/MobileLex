@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useMemo, useState } from 'react';
 
 export type NotificationActivityTone = 'info' | 'success' | 'warning' | 'error';
-export type NotificationActivityRouteKind = 'messages' | 'consultations' | 'group-chat' | 'video-call' | 'payments';
+export type NotificationActivityRouteKind = 'messages' | 'consultations' | 'group-chat' | 'video-call' | 'payments' | 'team';
 
 export type NotificationActivity = {
   id: string;

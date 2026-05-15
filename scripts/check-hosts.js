@@ -15,6 +15,7 @@
 
 const fs   = require('fs');
 const path = require('path');
+const mobileOnly = process.argv.includes('--mobile-only');
 
 // ── Path resolution ──────────────────────────────────────────────────────────
 // Update WEB_ROOT if your folder layout ever changes.
@@ -70,7 +71,7 @@ const warnings = [];
 if (!fs.existsSync(MOBILE_ENV)) {
   errors.push(`Mobile .env not found: ${MOBILE_ENV}`);
 }
-if (!fs.existsSync(WEB_ENV)) {
+if (!mobileOnly && !fs.existsSync(WEB_ENV)) {
   errors.push(`Web .env not found: ${WEB_ENV}`);
 }
 
@@ -83,12 +84,12 @@ if (errors.length) {
 if (!mobileHost) {
   errors.push('EXPO_PUBLIC_SHARED_BACKEND_HOST is missing or empty in mobile .env/.env.local');
 }
-if (!webHost) {
+if (!mobileOnly && !webHost) {
   errors.push('SHARED_BACKEND_HOST is missing or empty in web .env');
 }
 
 // ── Compare declared hosts ────────────────────────────────────────────────────
-if (mobileHost && webHost && mobileHost !== webHost) {
+if (!mobileOnly && mobileHost && webHost && mobileHost !== webHost) {
   errors.push(
     `Host mismatch!\n` +
     `  Mobile (EXPO_PUBLIC_SHARED_BACKEND_HOST) = ${mobileHost}\n` +
@@ -105,14 +106,14 @@ if (mobileHost && mobileApiHost && mobileApiHost !== mobileHost) {
 }
 
 // ── Cross-check APP_URL host matches declared web host ────────────────────────
-if (webHost && webAppHost && webAppHost !== webHost) {
+if (!mobileOnly && webHost && webAppHost && webAppHost !== webHost) {
   errors.push(
     `Web APP_URL host (${webAppHost}) does not match SHARED_BACKEND_HOST (${webHost}).`
   );
 }
 
 // ── Warn if web server IP is different from the one in mobile API base ────────
-if (mobileApiHost && webAppHost && mobileApiHost !== webAppHost) {
+if (!mobileOnly && mobileApiHost && webAppHost && mobileApiHost !== webAppHost) {
   warnings.push(
     `EXPO_PUBLIC_API_BASE (${mobileApiHost}) and APP_URL (${webAppHost}) point to different servers — mobile and web will NOT share the same database.`
   );
@@ -131,9 +132,14 @@ if (errors.length) {
 const lines = [
   `  Mobile (EXPO_PUBLIC_API_BASE)              : ${mobileApiBase || '(not set)'}`,
   `  Mobile (EXPO_PUBLIC_SHARED_BACKEND_HOST)   : ${mobileHost}`,
-  `  Web    (APP_URL)                           : ${webAppUrl || '(not set)'}`,
-  `  Web    (SHARED_BACKEND_HOST)               : ${webHost}`,
 ];
+
+if (!mobileOnly) {
+  lines.push(
+    `  Web    (APP_URL)                           : ${webAppUrl || '(not set)'}`,
+    `  Web    (SHARED_BACKEND_HOST)               : ${webHost}`,
+  );
+}
 
 if (warnings.length) {
   printBlock('WARN', 'yellow', [...lines, '', ...warnings.map(w => `  ⚠ ${w}`)]);

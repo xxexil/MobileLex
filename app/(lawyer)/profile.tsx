@@ -82,6 +82,18 @@ function getNextBusinessDay() {
   return current;
 }
 
+function normalizePracticeAreas(profile: any): string[] {
+  const source = Array.isArray(profile?.practice_areas)
+    ? profile.practice_areas
+    : Array.isArray(profile?.specialties)
+      ? profile.specialties
+      : String(profile?.practice_areas ?? profile?.specialties ?? profile?.specialty ?? '').split(',');
+
+  return Array.from(new Set(
+    source.map((item: unknown) => String(item ?? '').trim()).filter(Boolean)
+  ));
+}
+
 export default function LawyerProfile() {
   const router = useRouter();
   const { logout, updateUser, user } = useAuth();
@@ -413,6 +425,7 @@ export default function LawyerProfile() {
   const canGoPrevMonth = formatMonthValue(blockCalendarMonth) > formatMonthValue(currentMonth);
   const blockedLookup = new Map(blockedDates.map((entry) => [entry.date, entry]));
   const selectedBlockedEntry = blockedLookup.get(selectedBlockedDate);
+  const practiceAreas = normalizePracticeAreas(profile);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -468,7 +481,7 @@ export default function LawyerProfile() {
         <Text style={styles.accountDetailsTitle}>Account Details</Text>
         <DetailRow icon="mail-outline" label="Email" value={profile?.email || 'Not set'} verified />
         <DetailRow icon="call-outline" label="Phone" value={profile?.phone || 'Not set'} verified={Boolean(String(profile?.phone ?? '').trim())} />
-        <DetailRow icon="briefcase-outline" label="Specialty" value={profile?.specialty || 'Not set'} />
+        <DetailRow icon="briefcase-outline" label="Practice Areas" value={practiceAreas.join(', ') || profile?.specialty || 'Not set'} />
         <DetailRow icon="location-outline" label="Location" value={profile?.location || 'Not set'} />
         <View style={styles.badgesRow}>
           <VerificationBadge icon="shield-checkmark-outline" text="Protected Session" tone="blue" />

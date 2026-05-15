@@ -154,6 +154,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const storedToken = await SecureStore.getItemAsync(AUTH_TOKEN_KEY);
       const storedUser = await SecureStore.getItemAsync(AUTH_USER_KEY);
       if (storedToken && storedUser) {
+        const parsedStoredUser = JSON.parse(storedUser);
+        if (String(storedToken).startsWith('dev-admin-preview') || Number(parsedStoredUser?.id) === 0) {
+          await clearAuth();
+          return;
+        }
+
         const storedLastActiveAt = await SecureStore.getItemAsync(AUTH_LAST_ACTIVE_KEY);
         if (storedLastActiveAt) {
           const idleMs = Date.now() - Number(storedLastActiveAt);
@@ -164,7 +170,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
 
         setToken(storedToken);
-        setUser(JSON.parse(storedUser));
+        setUser(parsedStoredUser);
         // Refresh user data from server
         try {
           const { data } = await authApi.me();
@@ -192,29 +198,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   async function login(email: string, password: string) {
     const normalizedEmail = email.trim().toLowerCase();
-    try {
-      const { data } = await authApi.login(normalizedEmail, password);
-      await setSession(data.token, normalizeUserRole(data.user), data?.session_key);
-    } catch (error: any) {
-      const status = error?.response?.status;
-      const message = error?.response?.data?.message || error?.response?.data?.error || '';
-      if (
-        __DEV__
-        && status === 403
-        && typeof message === 'string'
-        && message.toLowerCase().includes('admin access is not available on mobile')
-      ) {
-        await setSession(`dev-admin-preview-${Date.now()}`, {
-          id: 0,
-          name: 'Admin Preview',
-          email: normalizedEmail,
-          role: 'admin',
-        });
-        Alert.alert('Admin Preview Mode', 'Backend still blocks admin mobile login. Opened local admin preview so you can test dashboard features.');
-        return;
-      }
-      throw error;
-    }
+    const { data } = await authApi.login(normalizedEmail, password);
+    await setSession(data.token, normalizeUserRole(data.user), data?.session_key);
   }
 
   async function setSession(sessionToken: string, sessionUser: User, sessionKey?: string | null) {

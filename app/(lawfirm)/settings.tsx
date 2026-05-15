@@ -33,6 +33,27 @@ function pickText(...values: unknown[]) {
   return '';
 }
 
+function getErrorText(error: any) {
+  const errors = error?.response?.data?.errors;
+  if (errors) return Object.values(errors).flat().join('\n');
+  return String(error?.response?.data?.message ?? error?.message ?? '');
+}
+
+function isDuplicateFirmNameError(error: any) {
+  const message = getErrorText(error).toLowerCase();
+  return (
+    message.includes('firm')
+    && message.includes('name')
+    && (
+      message.includes('already')
+      || message.includes('taken')
+      || message.includes('unique')
+      || message.includes('duplicate')
+      || message.includes('exists')
+    )
+  );
+}
+
 type FirmDocKey = 'dti_sec_registration' | 'business_permit' | 'valid_id' | 'firm_ibp_id';
 
 const FIRM_DOCUMENTS: { key: FirmDocKey; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
@@ -207,6 +228,11 @@ export default function LawFirmSettingsScreen() {
   }
 
   async function handleSaveProfile() {
+    if (!firmName.trim()) {
+      Alert.alert('Firm Name Required', 'Please enter a unique law firm name before saving.');
+      return;
+    }
+
     setSaving(true);
     try {
       const payload: Record<string, unknown> = {
@@ -231,6 +257,13 @@ export default function LawFirmSettingsScreen() {
       await load();
       Alert.alert('Saved', 'Firm profile updated successfully.');
     } catch (err: any) {
+      if (isDuplicateFirmNameError(err)) {
+        Alert.alert(
+          'Law Firm Name Already Exists',
+          'A law firm with this name is already registered. Please use a unique firm name.'
+        );
+        return;
+      }
       Alert.alert('Save Failed', err?.response?.data?.message || 'Unable to update profile right now.');
     } finally {
       setSaving(false);

@@ -33,17 +33,32 @@ interface ProfileDraft {
   name: string;
   phone: string;
   specialty: string;
+  practice_areas: string[];
   location: string;
   hourly_rate: string;
   experience_years: string;
   bio: string;
 }
 
+function normalizePracticeAreas(profile: any): string[] {
+  const source = Array.isArray(profile?.practice_areas)
+    ? profile.practice_areas
+    : Array.isArray(profile?.specialties)
+      ? profile.specialties
+      : String(profile?.practice_areas ?? profile?.specialties ?? profile?.specialty ?? '').split(',');
+
+  return Array.from(new Set(
+    source.map((item: unknown) => String(item ?? '').trim()).filter(Boolean)
+  ));
+}
+
 function profileToDraft(p: any): ProfileDraft {
+  const practiceAreas = normalizePracticeAreas(p);
   return {
     name: p?.name ?? '',
     phone: p?.phone ?? '',
-    specialty: p?.specialty ?? '',
+    specialty: p?.specialty ?? practiceAreas[0] ?? '',
+    practice_areas: practiceAreas,
     location: p?.location ?? '',
     hourly_rate: p?.hourly_rate ? String(p.hourly_rate) : '',
     experience_years: p?.experience_years ? String(p.experience_years) : '',
@@ -51,18 +66,23 @@ function profileToDraft(p: any): ProfileDraft {
   };
 }
 
-function diffDraft(original: ProfileDraft, draft: ProfileDraft): { field: string; from: string; to: string }[] {
-  const labels: Record<keyof ProfileDraft, string> = {
+function diffDraft(original: ProfileDraft, draft: ProfileDraft): { field: string | undefined; from: string | string[]; to: string | string[] }[] {
+  const labels: Partial<Record<keyof ProfileDraft, string>> = {
     name: 'Name',
     phone: 'Phone',
     specialty: 'Specialty',
+    practice_areas: 'Practice Areas',
     location: 'Location',
     hourly_rate: 'Hourly Rate',
     experience_years: 'Experience',
     bio: 'Bio',
   };
   return (Object.keys(labels) as (keyof ProfileDraft)[])
-    .filter((k) => (draft[k] ?? '').trim() !== (original[k] ?? '').trim())
+    .filter((k) => {
+      const nextValue = Array.isArray(draft[k]) ? (draft[k] as string[]).join(', ') : String(draft[k] ?? '').trim();
+      const originalValue = Array.isArray(original[k]) ? (original[k] as string[]).join(', ') : String(original[k] ?? '').trim();
+      return nextValue !== originalValue;
+    })
     .map((k) => ({ field: labels[k], from: original[k] || '—', to: draft[k] || '—' }));
 }
 
@@ -85,7 +105,8 @@ export default function LawyerSettingsScreen() {
 
   // — Profile edit state —
   const [editMode, setEditMode] = useState(false);
-  const [draft, setDraft] = useState<ProfileDraft>({ name: '', phone: '', specialty: '', location: '', hourly_rate: '', experience_years: '', bio: '' });
+  const [draft, setDraft] = useState<ProfileDraft>({ name: '', phone: '', specialty: '', practice_areas: [], location: '', hourly_rate: '', experience_years: '', bio: '' });
+  const [practiceAreaInput, setPracticeAreaInput] = useState('');
   const originalDraft = useRef<ProfileDraft>(draft);
   const [confirmVisible, setConfirmVisible] = useState(false);
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -240,14 +261,40 @@ export default function LawyerSettingsScreen() {
 
   function cancelEdit() {
     setDraft({ ...originalDraft.current });
+    setPracticeAreaInput('');
     setEditMode(false);
   }
 
+  function addPracticeArea() {
+    const value = practiceAreaInput.trim();
+    if (!value) return;
+    setDraft((current) => {
+      const exists = current.practice_areas.some((area) => area.toLowerCase() === value.toLowerCase());
+      if (exists) return current;
+      const nextAreas = [...current.practice_areas, value];
+      return { ...current, practice_areas: nextAreas, specialty: current.specialty || value };
+    });
+    setPracticeAreaInput('');
+  }
+
+  function removePracticeArea(area: string) {
+    setDraft((current) => {
+      const nextAreas = current.practice_areas.filter((item) => item !== area);
+      return {
+        ...current,
+        practice_areas: nextAreas,
+        specialty: current.specialty === area ? (nextAreas[0] ?? '') : current.specialty,
+      };
+    });
+  }
+
   function requestSave() {
+    const normalizedAreas = Array.from(new Set([draft.specialty, ...draft.practice_areas].map((area) => area.trim()).filter(Boolean)));
     const trimmed: ProfileDraft = {
       name: draft.name.trim(),
       phone: draft.phone.trim(),
-      specialty: draft.specialty.trim(),
+      specialty: (draft.specialty.trim() || normalizedAreas[0] || '').trim(),
+      practice_areas: normalizedAreas,
       location: draft.location.trim(),
       hourly_rate: draft.hourly_rate.trim(),
       experience_years: draft.experience_years.trim(),
@@ -278,11 +325,15 @@ export default function LawyerSettingsScreen() {
     try {
       // Verify identity first
       await authApi.login((profile?.email ?? '').trim().toLowerCase(), pwd);
+      const practiceAreas = Array.from(new Set([draft.specialty, ...draft.practice_areas].map((area) => area.trim()).filter(Boolean)));
+      const primaryPracticeArea = draft.specialty.trim() || practiceAreas[0] || null;
 
       const payload: Record<string, unknown> = {
         name: draft.name.trim(),
         phone: draft.phone.trim() || null,
-        specialty: draft.specialty.trim() || null,
+        specialty: primaryPracticeArea,
+        practice_areas: practiceAreas,
+        specialties: practiceAreas,
         location: draft.location.trim() || null,
       };
       if (draft.hourly_rate.trim()) payload.hourly_rate = parseFloat(draft.hourly_rate.trim());
@@ -373,7 +424,9 @@ export default function LawyerSettingsScreen() {
             </View>
           </TouchableOpacity>
           <Text style={styles.profileName}>{profile?.name ?? '—'}</Text>
-          <Text style={styles.profileSpecialty}>{profile?.specialty ?? 'Lawyer'}</Text>
+          <Text style={styles.profileSpecialty}>
+            {normalizePracticeAreas(profile).join(' • ') || profile?.specialty || 'Lawyer'}
+          </Text>
           {profile?.law_firm_name ? <Text style={styles.profileFirm}>{profile.law_firm_name}</Text> : null}
           <View style={styles.profileStats}>
             <View style={styles.profileStat}>
@@ -460,8 +513,8 @@ export default function LawyerSettingsScreen() {
               <TextInput
                 style={styles.input}
                 value={draft.specialty}
-                onChangeText={(v) => setDraft((p) => ({ ...p, specialty: v }))}
-                placeholder="e.g. Corporate Law"
+                onChangeText={(v) => setDraft((p) => ({ ...p, specialty: v, practice_areas: p.practice_areas.length ? p.practice_areas : (v.trim() ? [v.trim()] : []) }))}
+                placeholder="Primary practice area"
                 placeholderTextColor={Colors.textLight}
               />
             </View>
@@ -474,6 +527,36 @@ export default function LawyerSettingsScreen() {
                 placeholder="Law firm"
                 placeholderTextColor={Colors.textLight}
               />
+            </View>
+          </View>
+
+          <View style={styles.fieldWrap}>
+            <Text style={styles.fieldLabel}>Practice Areas</Text>
+            <View style={styles.practiceInputRow}>
+              <TextInput
+                style={[styles.input, styles.practiceInput]}
+                value={practiceAreaInput}
+                onChangeText={setPracticeAreaInput}
+                placeholder="Add another area, e.g. Family Law"
+                placeholderTextColor={Colors.textLight}
+                onSubmitEditing={addPracticeArea}
+                returnKeyType="done"
+              />
+              <TouchableOpacity style={styles.addPracticeBtn} onPress={addPracticeArea}>
+                <Ionicons name="add" size={18} color="#fff" />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.practiceChipWrap}>
+              {draft.practice_areas.length ? draft.practice_areas.map((area) => (
+                <View key={area} style={styles.practiceChip}>
+                  <Text style={styles.practiceChipText}>{area}</Text>
+                  <TouchableOpacity onPress={() => removePracticeArea(area)} hitSlop={8}>
+                    <Ionicons name="close" size={14} color={Colors.primary} />
+                  </TouchableOpacity>
+                </View>
+              )) : (
+                <Text style={styles.practiceHint}>Add multiple practice areas so clients can find you in more searches.</Text>
+              )}
             </View>
           </View>
 
@@ -760,6 +843,30 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12, paddingVertical: 10,
     fontSize: 14, color: Colors.text, backgroundColor: Colors.background,
   },
+  practiceInputRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  practiceInput: { flex: 1 },
+  addPracticeBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  practiceChipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
+  practiceChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    backgroundColor: `${Colors.primary}12`,
+    borderWidth: 1,
+    borderColor: `${Colors.primary}30`,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  practiceChipText: { color: Colors.primary, fontWeight: '800', fontSize: 12 },
+  practiceHint: { color: Colors.textMuted, fontSize: 12, lineHeight: 17 },
   inputDisabled: { opacity: 0.5, backgroundColor: Colors.border + '30' },
   bioInput: { minHeight: 90, paddingTop: 10 },
     viewDocLink: { fontSize: 12, color: Colors.primary, textDecorationLine: 'underline', marginBottom: 6 },

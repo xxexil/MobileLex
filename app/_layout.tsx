@@ -6,15 +6,17 @@ import * as SplashScreen from 'expo-splash-screen';
 import LegalAcceptanceDialog from '@/components/LegalAcceptanceDialog';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { registerForPushNotifications, unregisterPushToken } from '@/services/push-notifications';
-import { groupApi } from '@/services/api';
+import { clientApi, groupApi } from '@/services/api';
 import { parseCallSignal } from '@/services/call-signals';
 import {
   createReverbEcho,
   isReverbConfigured,
   subscribeUserConsultationEvents,
+  subscribeUserFirmApplicationEvents,
   subscribeUserMessageEvents,
   subscribeUserPaymentEvents,
 } from '@/services/realtime';
+import { buildAcceptedElsewhereActivity } from '@/utils/firmApplications';
 
 const isExpoGo = Constants.appOwnership === 'expo';
 // Lazy load to prevent DevicePushTokenAutoRegistration.fx.js from running in Expo Go.
@@ -58,6 +60,7 @@ function RootNavigator() {
   const realtimeCleanupRef = useRef<(() => void) | null>(null);
   const recentRealtimeKeysRef = useRef<Record<string, number>>({});
   const completedPaymentRedirectsRef = useRef<Record<string, number>>({});
+  const lawyerCallReadyNotifiedRef = useRef<Set<number>>(new Set());
   const segments = useSegments();
   const router = useRouter();
   const roleTheme =
@@ -143,7 +146,7 @@ function RootNavigator() {
   };
 
   const openActivityRoute = (activity: {
-    routeKind?: 'messages' | 'consultations' | 'group-chat' | 'video-call' | 'payments';
+    routeKind?: 'messages' | 'consultations' | 'group-chat' | 'video-call' | 'payments' | 'team';
     conversationId?: number;
     consultationId?: number;
     groupId?: number;
@@ -159,11 +162,13 @@ function RootNavigator() {
       }
 
       const pathname = user.role === 'lawyer' ? '/(lawyer)/video-call' : '/(client)/video-call';
+      const isConsultationCall = Boolean(activity.consultationId);
       router.push({
         pathname,
         params: {
-          mode: activity.mode === 'group' ? 'group' : 'one-on-one',
+          mode: isConsultationCall ? 'consultation' : activity.mode === 'group' ? 'group' : 'one-on-one',
           ...(activity.title ? { title: activity.title } : {}),
+          ...(activity.consultationId ? { consultationId: String(activity.consultationId) } : {}),
           ...(activity.conversationId ? { conversationId: String(activity.conversationId) } : {}),
           ...(activity.groupId ? { groupId: String(activity.groupId) } : {}),
         },
@@ -196,6 +201,13 @@ function RootNavigator() {
       return;
     }
 
+    if (activity.routeKind === 'team') {
+      if (user.role === 'law_firm') {
+        router.push('/(lawfirm)/team' as any);
+      }
+      return;
+    }
+
     if (user.role === 'client') {
       router.push({ pathname: '/(client)/consultations', params: activity.consultationId ? { consultationId: String(activity.consultationId) } : {} } as any);
     } else if (user.role === 'law_firm') {
@@ -224,7 +236,7 @@ function RootNavigator() {
     body: string;
     tone: 'info' | 'success' | 'warning' | 'error';
     icon: string;
-    routeKind?: 'messages' | 'consultations' | 'group-chat' | 'video-call' | 'payments';
+    routeKind?: 'messages' | 'consultations' | 'group-chat' | 'video-call' | 'payments' | 'team';
     conversationId?: number;
     consultationId?: number;
     groupId?: number;
@@ -249,6 +261,30 @@ function RootNavigator() {
       groupId,
       mode,
       callTitle: titleOverride,
+    });
+  };
+
+  const notifyClientLawyerJoinedCall = async (consultation: {
+    id?: number;
+    code?: string;
+    type?: string;
+    lawyer_name?: string;
+  }) => {
+    const consultationId = Number(consultation?.id ?? 0);
+    if (!consultationId || lawyerCallReadyNotifiedRef.current.has(consultationId)) return;
+
+    lawyerCallReadyNotifiedRef.current.add(consultationId);
+    await pushRealtimeActivity({
+      kind: 'lawyer-joined-consultation-call',
+      title: 'Lawyer Joined the Call',
+      body: `${consultation.lawyer_name || 'Your lawyer'} is in the consultation call and waiting for you.`,
+      tone: 'warning',
+      icon: 'videocam-outline',
+      routeKind: 'video-call',
+      consultationId,
+      localNotificationType: 'call',
+      mode: 'one-on-one',
+      titleOverride: consultation.code || consultation.type || 'Consultation',
     });
   };
 
@@ -290,6 +326,7 @@ function RootNavigator() {
           const title = data?.title ? String(data.title) : undefined;
           openActivityRoute({
             routeKind: 'video-call',
+            consultationId: consultationId ? Number(consultationId) : undefined,
             conversationId: conversationId ? Number(conversationId) : undefined,
             groupId: groupId ? Number(groupId) : undefined,
             mode,
@@ -324,6 +361,14 @@ function RootNavigator() {
 
   useEffect(() => {
     if (!bannerActivity) return;
+
+    if (bannerActivity.kind === 'lawyer-joined-consultation-call') {
+      const timeout = setTimeout(() => {
+        dismissBanner();
+      }, 6500);
+
+      return () => clearTimeout(timeout);
+    }
 
     if (bannerActivity.tone === 'warning' || bannerActivity.tone === 'error') {
       return;
@@ -422,6 +467,11 @@ function RootNavigator() {
         const schedLabel = consultation.scheduled_at
           ? ` on ${new Date(consultation.scheduled_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
           : '';
+
+        if (user.role === 'client' && consultation.status === 'upcoming' && consultation.lawyer_in_video_call) {
+          await notifyClientLawyerJoinedCall(consultation);
+          return;
+        }
 
         if (user.role === 'client' && consultation.status === 'upcoming') {
           await pushRealtimeActivity({
@@ -536,6 +586,30 @@ function RootNavigator() {
         }
       }
     });
+
+    const offFirmApplications = user.role === 'law_firm'
+      ? subscribeUserFirmApplicationEvents(echo, user.id, async (payload) => {
+          const application = {
+            ...(payload?.application ?? {}),
+            lawyer: payload?.application?.lawyer ?? payload?.lawyer,
+            accepted_firm: payload?.application?.accepted_firm ?? payload?.accepted_firm,
+            accepted_firm_name: payload?.application?.accepted_firm_name ?? payload?.accepted_firm_name,
+            accepted_elsewhere: true,
+          };
+          const activity = buildAcceptedElsewhereActivity(application);
+
+          triggerLawFirmUnreadRefresh();
+          addActivity(activity);
+
+          if (AppState.currentState !== 'active') {
+            await scheduleRealtimeNotification({
+              title: activity.title,
+              body: activity.body,
+              type: 'consultation',
+            });
+          }
+        })
+      : null;
 
     const offMessages = subscribeUserMessageEvents(echo, user.id, (payload) => {
       if (Number(payload?.sender_id ?? 0) === Number(user.id)) return;
@@ -663,6 +737,7 @@ function RootNavigator() {
       groupSubscriptionsDisposed = true;
       offConsultations();
       offPayments();
+      offFirmApplications?.();
       offMessages();
       groupCleanupFns.forEach((cleanup) => cleanup());
       echo.disconnect();
@@ -682,6 +757,42 @@ function RootNavigator() {
     addActivity,
     dismissBanner,
   ]);
+
+  useEffect(() => {
+    if (user?.role !== 'client' || !token) return;
+
+    let disposed = false;
+
+    const checkLawyerCallPresence = async () => {
+      if (disposed || AppState.currentState !== 'active') return;
+
+      try {
+        const { data } = await clientApi.consultations('upcoming');
+        const consultations = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
+
+        consultations.forEach((consultation: any) => {
+          const consultationId = Number(consultation?.id ?? 0);
+          if (!consultationId) return;
+
+          if (consultation?.lawyer_in_video_call) {
+            void notifyClientLawyerJoinedCall(consultation);
+          } else {
+            lawyerCallReadyNotifiedRef.current.delete(consultationId);
+          }
+        });
+      } catch {
+        // Best-effort foreground banner fallback. The consultations screen still handles manual joining.
+      }
+    };
+
+    void checkLawyerCallPresence();
+    const timer = setInterval(checkLawyerCallPresence, 8000);
+
+    return () => {
+      disposed = true;
+      clearInterval(timer);
+    };
+  }, [token, user?.id, user?.role]);
 
   useEffect(() => {
     if (isLoading || legalAccepted === false) return;

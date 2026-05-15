@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { RoleColors } from '@/constants/theme';
 import { formatPhp } from '@/constants/currency';
 import { adminApi } from '@/services/api';
-import { PageHeader, Stat, styles } from './all-users';
+import { PageHeader, styles } from './all-users';
 
 function normalize(payload: any) {
   const list = payload?.consultations ?? payload?.recent_consultations ?? payload?.recentConsultations ?? payload?.data ?? [];
@@ -74,16 +74,45 @@ export default function AdminConsultationsScreen() {
   return (
     <ScrollView style={styles.root} contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} />}>
       <PageHeader title="Consultations" />
-      <View style={local.statsGrid}>
-        <Stat value={formatPhp(summary.revenue)} label="Total Revenue" icon="cash" color={RoleColors.admin.accent} />
-        <Stat value={summary.pending} label="Pending" icon="hourglass" color="#D97706" />
-        <Stat value={summary.upcoming} label="Upcoming" icon="calendar" color="#3B82F6" />
-        <Stat value={summary.completed} label="Completed" icon="checkmark-circle" color="#10B981" />
-        <Stat value={summary.cancelled} label="Cancelled" icon="close-circle" color="#EF4444" />
+      <View style={local.summaryStack}>
+        <View style={local.revenueCard}>
+          <View style={local.revenueCopy}>
+            <Text style={local.summaryKicker}>Total Revenue</Text>
+            <Text style={local.revenueValue}>{formatPhp(summary.revenue)}</Text>
+            <Text style={local.summaryHint}>Across all consultations</Text>
+          </View>
+          <View style={local.revenueIcon}>
+            <Ionicons name="cash" size={24} color={RoleColors.admin.accent} />
+          </View>
+        </View>
+
+        <View style={local.statusGrid}>
+          <SummaryTile value={summary.pending} label="Pending" icon="hourglass" color="#D97706" />
+          <SummaryTile value={summary.upcoming} label="Upcoming" icon="calendar" color="#3B82F6" />
+          <SummaryTile value={summary.completed} label="Completed" icon="checkmark-circle" color="#10B981" />
+          <SummaryTile value={summary.cancelled} label="Cancelled" icon="close-circle" color="#EF4444" />
+        </View>
       </View>
-      <View style={styles.filterCard}>
-        <TextInput style={styles.searchInput} value={query} onChangeText={setQuery} placeholder="Search code, client, or lawyer..." placeholderTextColor="#7A8497" />
-        <TouchableOpacity style={styles.filterBtn} activeOpacity={0.85}><Ionicons name="search" size={17} color="#fff" /><Text style={styles.filterText}>Filter</Text></TouchableOpacity>
+      <View style={local.filterCard}>
+        <View style={local.searchBox}>
+          <Ionicons name="search" size={17} color="#7A8497" />
+          <TextInput
+            style={local.searchInput}
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Search code, client, or lawyer..."
+            placeholderTextColor="#7A8497"
+          />
+          {query.trim() ? (
+            <TouchableOpacity onPress={() => setQuery('')} hitSlop={8}>
+              <Ionicons name="close-circle" size={18} color="#98A2B3" />
+            </TouchableOpacity>
+          ) : null}
+        </View>
+        <TouchableOpacity style={local.filterBtn} activeOpacity={0.85}>
+          <Ionicons name="options-outline" size={17} color="#fff" />
+          <Text style={local.filterText}>Filter Consultations</Text>
+        </TouchableOpacity>
       </View>
       {consultations.length === 0 ? <View style={styles.tableCard}><Text style={styles.empty}>No consultations found.</Text></View> : consultations.map((item: any, index: number) => {
         const tone = statusTone(item?.status);
@@ -132,8 +161,102 @@ function Footer({ icon, text }: { icon: any; text: string }) {
   );
 }
 
+function SummaryTile({ value, label, icon, color }: { value: string | number; label: string; icon: any; color: string }) {
+  return (
+    <View style={local.summaryTile}>
+      <View style={[local.summaryIcon, { backgroundColor: `${color}18` }]}>
+        <Ionicons name={icon} size={20} color={color} />
+      </View>
+      <View style={local.summaryTileCopy}>
+        <Text style={local.summaryValue}>{value}</Text>
+        <Text style={local.summaryLabel} numberOfLines={1}>{label}</Text>
+      </View>
+    </View>
+  );
+}
+
 const local = StyleSheet.create({
-  statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 14 },
+  summaryStack: { gap: 10, marginBottom: 14 },
+  revenueCard: {
+    backgroundColor: RoleColors.admin.shell,
+    borderRadius: 18,
+    padding: 16,
+    minHeight: 118,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    shadowColor: RoleColors.admin.shell,
+    shadowOpacity: 0.18,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 4,
+  },
+  revenueCopy: { flex: 1, paddingRight: 12 },
+  summaryKicker: { color: '#D7DEE9', fontSize: 12, fontWeight: '800' },
+  revenueValue: { color: '#FFFFFF', fontSize: 30, fontWeight: '900', marginTop: 8 },
+  summaryHint: { color: '#D7DEE9', fontSize: 12, fontWeight: '700', marginTop: 5 },
+  revenueIcon: {
+    width: 58,
+    height: 58,
+    borderRadius: 18,
+    backgroundColor: '#FFF5DC',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  statusGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  summaryTile: {
+    width: '48.5%',
+    minHeight: 84,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E1E7F0',
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  summaryIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  summaryTileCopy: { flex: 1, minWidth: 0 },
+  summaryValue: { color: RoleColors.admin.shell, fontSize: 24, fontWeight: '900' },
+  summaryLabel: { color: '#566174', fontSize: 12, fontWeight: '800', marginTop: 2 },
+  filterCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#E1E7F0',
+    padding: 12,
+    marginBottom: 14,
+    gap: 10,
+  },
+  searchBox: {
+    minHeight: 50,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: '#D8E0EC',
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  searchInput: { flex: 1, minHeight: 48, color: '#111827', fontSize: 14, fontWeight: '600' },
+  filterBtn: {
+    minHeight: 48,
+    borderRadius: 13,
+    backgroundColor: RoleColors.admin.accent,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  filterText: { color: '#fff', fontWeight: '900', fontSize: 14 },
   consultCard: { backgroundColor: '#fff', borderRadius: 16, borderWidth: 1, borderLeftWidth: 4, borderColor: '#E8EDF5', padding: 16, marginBottom: 12 },
   pillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   codePill: { backgroundColor: '#F3F4F6', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 },

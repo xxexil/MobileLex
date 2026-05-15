@@ -91,6 +91,15 @@ export default function AdminLayout() {
             ),
           }}
         />
+        <Tabs.Screen
+          name="utility"
+          options={{
+            title: 'Utility',
+            tabBarIcon: ({ focused, color, size }) => (
+              <AnimatedTabIcon focused={focused} name="construct-outline" size={size} color={color} />
+            ),
+          }}
+        />
         <Tabs.Screen name="users" options={{ href: null }} />
         <Tabs.Screen name="system" options={{ href: null }} />
       </Tabs>

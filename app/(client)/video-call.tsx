@@ -2,12 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Modal,
   NativeModules,
   PermissionsAndroid,
   Platform,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -16,6 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 
 import { useAuth } from '@/context/auth';
+import { useNotifications } from '@/context/notifications';
 import { clientApi, lawyerApi } from '@/services/api';
 import { createReverbEcho, isReverbConfigured } from '@/services/realtime';
 
@@ -51,7 +54,7 @@ type ConsultationVideoMetadata = {
 };
 
 type SignalPayload = {
-  type: 'peer-ready' | 'offer' | 'answer' | 'ice-candidate' | 'hangup' | 'audio-muted' | 'consultation-ended';
+  type: 'peer-ready' | 'offer' | 'answer' | 'ice-candidate' | 'hangup' | 'audio-muted' | 'media-state' | 'consultation-ended';
   signalId: string;
   consultationId: number;
   fromUserId: number;
@@ -60,6 +63,9 @@ type SignalPayload = {
   sentAt: number;
   sdp?: unknown;
   candidate?: unknown;
+  muted?: boolean;
+  cameraOff?: boolean;
+  screenSharing?: boolean;
   balance_checkout_url?: string | null;
 };
 
@@ -128,11 +134,36 @@ function formatCallDateTime(value?: string | null) {
   });
 }
 
+function padDurationPart(value: number) {
+  return String(value).padStart(2, '0');
+}
+
+function getCallWindow(metadata?: ConsultationVideoMetadata | null) {
+  const scheduledAt = metadata?.consultation?.scheduled_at;
+  const durationMinutes = Number(metadata?.consultation?.duration_minutes || 0);
+  if (!scheduledAt || !durationMinutes) return null;
+
+  const startMs = new Date(scheduledAt).getTime();
+  if (!Number.isFinite(startMs)) return null;
+
+  const endMs = startMs + durationMinutes * 60 * 1000;
+  return { startMs, endMs, durationMinutes };
+}
+
+function formatDuration(ms: number) {
+  const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}:${padDurationPart(minutes)}:${padDurationPart(seconds)}`;
+  return `${minutes}:${padDurationPart(seconds)}`;
+}
+
 function createSignal(
   metadata: ConsultationVideoMetadata,
   user: { id: number; role?: string },
   type: SignalPayload['type'],
-  extras: Partial<Pick<SignalPayload, 'sdp' | 'candidate'>> = {},
+  extras: Partial<Pick<SignalPayload, 'sdp' | 'candidate' | 'muted' | 'cameraOff' | 'screenSharing'>> = {},
 ): SignalPayload | null {
   if (!metadata.peer_id) return null;
   return {
@@ -159,6 +190,7 @@ async function requestCallPermissions() {
 export default function VideoCallScreen() {
   const router = useRouter();
   const { user, token } = useAuth();
+  const { addActivity } = useNotifications();
   const { mode, consultationId, title } = useLocalSearchParams<{
     mode?: string;
     consultationId?: string;
@@ -178,10 +210,17 @@ export default function VideoCallScreen() {
   const channelRef = useRef<any>(null);
   const pcRef = useRef<PeerConnectionLike | null>(null);
   const localStreamRef = useRef<MediaStreamLike | null>(null);
+  const cameraStreamRef = useRef<MediaStreamLike | null>(null);
+  const screenStreamRef = useRef<MediaStreamLike | null>(null);
   const remoteStreamRef = useRef<MediaStreamLike | null>(null);
   const pendingCandidatesRef = useRef<any[]>([]);
   const processedSignalIdsRef = useRef<Set<string>>(new Set());
   const fallbackTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lawyerJoinedBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lawyerJoinedBannerShownRef = useRef(false);
+  const callBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const peerOnlineRef = useRef(false);
+  const postCallPromptShownRef = useRef(false);
   const mountedRef = useRef(true);
 
   const [metadata, setMetadata] = useState<ConsultationVideoMetadata | null>(null);
@@ -191,16 +230,45 @@ export default function VideoCallScreen() {
   const [statusTitle, setStatusTitle] = useState('Preparing secure call');
   const [statusCopy, setStatusCopy] = useState('Loading backend WebRTC metadata.');
   const [peerOnline, setPeerOnline] = useState(false);
+  const [lawyerJoinedBannerVisible, setLawyerJoinedBannerVisible] = useState(false);
+  const [lawyerJoinedBannerText, setLawyerJoinedBannerText] = useState('Your lawyer joined the call.');
+  const [callBannerVisible, setCallBannerVisible] = useState(false);
+  const [callBannerText, setCallBannerText] = useState('');
+  const [callBannerIcon, setCallBannerIcon] = useState('information-circle-outline');
   const [localStreamUrl, setLocalStreamUrl] = useState<string | null>(null);
   const [remoteStreamUrl, setRemoteStreamUrl] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
   const [cameraOff, setCameraOff] = useState(false);
+  const [screenSharing, setScreenSharing] = useState(false);
   const [fullScreen, setFullScreen] = useState(false);
+  const [nowTick, setNowTick] = useState(Date.now());
+  const [callExpired, setCallExpired] = useState(false);
+  const [timeLimitWarned, setTimeLimitWarned] = useState(false);
+  const [postCallModalVisible, setPostCallModalVisible] = useState(false);
+  const [postCallRating, setPostCallRating] = useState(5);
+  const [postCallComment, setPostCallComment] = useState('');
+  const [submittingPostCallReview, setSubmittingPostCallReview] = useState(false);
 
   const scheduledAtLabel = useMemo(
     () => formatCallDateTime(metadata?.consultation?.scheduled_at),
     [metadata?.consultation?.scheduled_at],
   );
+  const callWindow = useMemo(() => getCallWindow(metadata), [metadata?.consultation?.scheduled_at, metadata?.consultation?.duration_minutes]);
+  const remainingMs = callWindow ? callWindow.endMs - nowTick : null;
+  const callTimerLabel = callWindow
+    ? remainingMs != null && remainingMs > 0
+      ? formatDuration(remainingMs)
+      : 'Time ended'
+    : 'No limit set';
+  const callTimerTone = !callWindow || remainingMs == null
+    ? 'neutral'
+    : remainingMs <= 0
+      ? 'ended'
+      : remainingMs <= 60 * 1000
+        ? 'danger'
+        : remainingMs <= 5 * 60 * 1000
+          ? 'warning'
+          : 'normal';
   const callPartnerName = useMemo(() => {
     const raw = String(title || '').trim();
     if (raw && !raw.toLowerCase().includes('consultation')) return raw;
@@ -212,6 +280,73 @@ export default function VideoCallScreen() {
     if (!mountedRef.current) return;
     setStatusTitle(nextTitle);
     setStatusCopy(nextCopy);
+  }
+
+  function showLawyerJoinedBanner(message: string) {
+    if (isLawyer || !mountedRef.current) return;
+    if (lawyerJoinedBannerShownRef.current) return;
+    lawyerJoinedBannerShownRef.current = true;
+    if (lawyerJoinedBannerTimerRef.current) {
+      clearTimeout(lawyerJoinedBannerTimerRef.current);
+    }
+    setLawyerJoinedBannerText(message);
+    setLawyerJoinedBannerVisible(true);
+    addActivity({
+      kind: 'lawyer-joined-consultation-call',
+      title: 'Lawyer Joined the Call',
+      body: `${callPartnerName || 'Your lawyer'} is in the consultation call and waiting for you.`,
+      tone: 'warning',
+      icon: 'videocam-outline',
+      routeKind: 'video-call',
+      consultationId: metadata?.consultation?.id || consultationIdNumber || undefined,
+      mode: 'one-on-one',
+    });
+    lawyerJoinedBannerTimerRef.current = setTimeout(() => {
+      if (!mountedRef.current) return;
+      setLawyerJoinedBannerVisible(false);
+      lawyerJoinedBannerTimerRef.current = null;
+    }, 2600);
+  }
+
+  function showCallBanner(message: string, icon = 'information-circle-outline') {
+    if (!mountedRef.current) return;
+    if (callBannerTimerRef.current) {
+      clearTimeout(callBannerTimerRef.current);
+    }
+    setCallBannerText(message);
+    setCallBannerIcon(icon);
+    setCallBannerVisible(true);
+    callBannerTimerRef.current = setTimeout(() => {
+      if (!mountedRef.current) return;
+      setCallBannerVisible(false);
+      callBannerTimerRef.current = null;
+    }, 3600);
+  }
+
+  function sendMediaState(next: Partial<Pick<SignalPayload, 'muted' | 'cameraOff' | 'screenSharing'>>) {
+    if (!metadata || !user) return;
+    whisper(createSignal(metadata, user, 'media-state', next));
+  }
+
+  function updatePeerOnline(nextOnline: boolean, bannerMessage?: string) {
+    if (!mountedRef.current) return;
+    const wasOnline = peerOnlineRef.current;
+    peerOnlineRef.current = nextOnline;
+    setPeerOnline(nextOnline);
+
+    if (!nextOnline) {
+      if (lawyerJoinedBannerTimerRef.current) {
+        clearTimeout(lawyerJoinedBannerTimerRef.current);
+        lawyerJoinedBannerTimerRef.current = null;
+      }
+      lawyerJoinedBannerShownRef.current = false;
+      setLawyerJoinedBannerVisible(false);
+      return;
+    }
+
+    if (!isLawyer && nextOnline && (!wasOnline || bannerMessage)) {
+      showLawyerJoinedBanner(bannerMessage || 'Your lawyer is in the call.');
+    }
   }
 
   function callApi() {
@@ -251,10 +386,19 @@ export default function VideoCallScreen() {
 
   function stopLocalMedia() {
     localStreamRef.current?.getTracks?.().forEach((track: any) => track.stop?.());
+    if (cameraStreamRef.current && cameraStreamRef.current !== localStreamRef.current) {
+      cameraStreamRef.current?.getTracks?.().forEach((track: any) => track.stop?.());
+    }
+    if (screenStreamRef.current && screenStreamRef.current !== localStreamRef.current) {
+      screenStreamRef.current?.getTracks?.().forEach((track: any) => track.stop?.());
+    }
     localStreamRef.current = null;
+    cameraStreamRef.current = null;
+    screenStreamRef.current = null;
     remoteStreamRef.current = null;
     setLocalStreamUrl(null);
     setRemoteStreamUrl(null);
+    setScreenSharing(false);
   }
 
   function leaveRealtime() {
@@ -307,7 +451,11 @@ export default function VideoCallScreen() {
     }
 
     localStreamRef.current = stream;
+    cameraStreamRef.current = stream;
     const streamUrl = stream.toURL?.();
+    stream.getAudioTracks?.().forEach((track: any) => {
+      track.enabled = !muted;
+    });
     const videoTracks = stream.getVideoTracks?.() || [];
     if (!videoTracks.length) {
       throw new Error('Camera permission is granted, but no camera video track was returned.');
@@ -326,12 +474,25 @@ export default function VideoCallScreen() {
   function showRemoteStream(stream: any) {
     if (!stream) return;
     remoteStreamRef.current = stream;
+    stream.getAudioTracks?.().forEach((track: any) => {
+      track.enabled = true;
+    });
+    stream.getVideoTracks?.().forEach((track: any) => {
+      track.enabled = true;
+    });
     const url = stream.toURL?.();
     if (url) setRemoteStreamUrl(url);
+    setLawyerJoinedBannerVisible(false);
     setCallStatus('Call connected', `You are now connected to the ${peerLabel}.`);
   }
 
   function handleRemoteTrack(event: any) {
+    if (event?.track) {
+      event.track.enabled = true;
+      if (event.track.kind === 'audio') {
+        showCallBanner(`${callPartnerName} audio connected.`, 'volume-high-outline');
+      }
+    }
     const stream = event?.streams?.[0] || event?.stream;
     if (stream) {
       showRemoteStream(stream);
@@ -442,21 +603,35 @@ export default function VideoCallScreen() {
       setCallStatus('Consultation ended', `The ${peerLabel} ended the consultation.`);
       closePeerConnection();
       if (!isLawyer) {
-        setTimeout(() => {
-          if (!mountedRef.current) return;
-          router.replace({
-            pathname: '/(client)/payments',
-            params: {
-              consultationId: String(payload.consultationId || metadata.consultation.id),
-              fromSessionEnd: '1',
-            },
-          } as any);
-        }, 700);
+        showPostCallPrompt();
       }
       return;
     }
 
     if (payload.type === 'audio-muted') {
+      showCallBanner(`${callPartnerName} muted their microphone.`, 'mic-off-outline');
+      return;
+    }
+
+    if (payload.type === 'media-state') {
+      if (typeof payload.muted === 'boolean') {
+        showCallBanner(
+          payload.muted ? `${callPartnerName} muted their microphone.` : `${callPartnerName} unmuted their microphone.`,
+          payload.muted ? 'mic-off-outline' : 'mic-outline',
+        );
+      }
+      if (typeof payload.cameraOff === 'boolean') {
+        showCallBanner(
+          payload.cameraOff ? `${callPartnerName} turned camera off.` : `${callPartnerName} turned camera on.`,
+          payload.cameraOff ? 'videocam-off-outline' : 'videocam-outline',
+        );
+      }
+      if (typeof payload.screenSharing === 'boolean') {
+        showCallBanner(
+          payload.screenSharing ? `${callPartnerName} started sharing screen.` : `${callPartnerName} stopped sharing screen.`,
+          'desktop-outline',
+        );
+      }
       return;
     }
 
@@ -518,7 +693,7 @@ export default function VideoCallScreen() {
     const channel = echo.join(metadata.signaling_channel)
       .here((members: Array<{ id: number }>) => {
         const online = members.some((member) => Number(member.id) === Number(metadata.peer_id));
-        setPeerOnline(online);
+        updatePeerOnline(online, online ? 'Your lawyer is already in the call.' : undefined);
         setCallStatus(
           online ? `${peerLabel[0].toUpperCase()}${peerLabel.slice(1)} online` : `Waiting for the ${peerLabel}`,
           `Joined WebRTC signaling channel ${metadata.signaling_channel}.`,
@@ -534,7 +709,7 @@ export default function VideoCallScreen() {
       })
       .joining((member: { id: number }) => {
         if (Number(member.id) !== Number(metadata.peer_id)) return;
-        setPeerOnline(true);
+        updatePeerOnline(true, 'Your lawyer joined the call.');
         if (metadata.is_offer_initiator || isLawyer) {
           void createOffer();
         } else {
@@ -543,7 +718,7 @@ export default function VideoCallScreen() {
       })
       .leaving((member: { id: number }) => {
         if (Number(member.id) !== Number(metadata.peer_id)) return;
-        setPeerOnline(false);
+        updatePeerOnline(false);
         setCallStatus(`Waiting for the ${peerLabel}`, `The ${peerLabel} left the signaling channel.`);
       })
       .listenForWhisper(peerSignalEventName, (payload: SignalPayload) => {
@@ -573,7 +748,7 @@ export default function VideoCallScreen() {
         ]);
 
         if (typeof heartbeatResponse?.data?.peer_online === 'boolean') {
-          setPeerOnline(Boolean(heartbeatResponse.data.peer_online));
+          updatePeerOnline(Boolean(heartbeatResponse.data.peer_online));
         }
 
         const signals = Array.isArray(signalsResponse?.data?.signals) ? signalsResponse.data.signals : [];
@@ -638,7 +813,8 @@ export default function VideoCallScreen() {
     cleanup(false);
     setRemoteStreamUrl(null);
     setLocalStreamUrl(null);
-    setPeerOnline(false);
+    updatePeerOnline(false);
+    lawyerJoinedBannerShownRef.current = false;
     processedSignalIdsRef.current = new Set();
     if (metadata?.can_join) {
       await startCall();
@@ -651,6 +827,8 @@ export default function VideoCallScreen() {
       track.enabled = !nextMuted;
     });
     setMuted(nextMuted);
+    showCallBanner(nextMuted ? 'Your microphone is muted.' : 'Your microphone is on.', nextMuted ? 'mic-off-outline' : 'mic-outline');
+    sendMediaState({ muted: nextMuted });
   }
 
   function toggleCamera() {
@@ -659,6 +837,76 @@ export default function VideoCallScreen() {
       track.enabled = !nextCameraOff;
     });
     setCameraOff(nextCameraOff);
+    showCallBanner(nextCameraOff ? 'Your camera is off.' : 'Your camera is on.', nextCameraOff ? 'videocam-off-outline' : 'videocam-outline');
+    sendMediaState({ cameraOff: nextCameraOff });
+  }
+
+  async function replaceOutgoingVideoTrack(nextTrack: any) {
+    const pc = pcRef.current;
+    if (!pc || !nextTrack) return;
+    const senders = typeof pc.getSenders === 'function' ? pc.getSenders() : [];
+    const videoSender = senders.find((sender: any) => sender?.track?.kind === 'video');
+    if (videoSender?.replaceTrack) {
+      await videoSender.replaceTrack(nextTrack);
+    }
+  }
+
+  async function stopScreenShare() {
+    const cameraStream = cameraStreamRef.current || await ensureLocalMedia();
+    const cameraVideoTrack = cameraStream.getVideoTracks?.()[0];
+    if (cameraVideoTrack) {
+      cameraVideoTrack.enabled = !cameraOff;
+      await replaceOutgoingVideoTrack(cameraVideoTrack);
+    }
+    screenStreamRef.current?.getTracks?.().forEach((track: any) => {
+      track.onended = null;
+      track.stop?.();
+    });
+    screenStreamRef.current = null;
+    localStreamRef.current = cameraStream;
+    const streamUrl = cameraStream.toURL?.();
+    if (streamUrl) setLocalStreamUrl(streamUrl);
+    setScreenSharing(false);
+    showCallBanner('Screen sharing stopped.', 'desktop-outline');
+    sendMediaState({ screenSharing: false });
+  }
+
+  async function toggleScreenShare() {
+    if (screenSharing) {
+      await stopScreenShare();
+      return;
+    }
+
+    if (!webrtc?.mediaDevices?.getDisplayMedia) {
+      showCallBanner('Screen sharing is not available in this build.', 'desktop-outline');
+      Alert.alert('Screen Share Unavailable', 'This Android build does not expose native screen sharing yet.');
+      return;
+    }
+
+    try {
+      const displayStream = await webrtc.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      const screenTrack = displayStream.getVideoTracks?.()[0];
+      if (!screenTrack) throw new Error('No screen video track was returned.');
+
+      screenTrack.onended = () => {
+        if (mountedRef.current) {
+          void stopScreenShare();
+        }
+      };
+
+      await replaceOutgoingVideoTrack(screenTrack);
+      screenStreamRef.current = displayStream;
+      localStreamRef.current = displayStream;
+      const streamUrl = displayStream.toURL?.();
+      if (streamUrl) setLocalStreamUrl(streamUrl);
+      setCameraOff(false);
+      setScreenSharing(true);
+      showCallBanner('Screen sharing started.', 'desktop-outline');
+      sendMediaState({ screenSharing: true, cameraOff: false });
+    } catch (shareError: any) {
+      showCallBanner('Could not start screen sharing.', 'desktop-outline');
+      Alert.alert('Screen Share Failed', shareError?.message || 'Unable to start screen sharing.');
+    }
   }
 
   function toggleFullScreen() {
@@ -670,6 +918,67 @@ export default function VideoCallScreen() {
     router.back();
   }
 
+  function goToBalancePayment() {
+    const targetId = metadata?.consultation?.id || consultationIdNumber;
+    setPostCallModalVisible(false);
+    router.replace({
+      pathname: '/(client)/payments',
+      params: {
+        consultationId: String(targetId),
+        fromSessionEnd: '1',
+        autoPay: '1',
+      },
+    } as any);
+  }
+
+  function showPostCallPrompt() {
+    if (isLawyer || postCallPromptShownRef.current) return;
+    postCallPromptShownRef.current = true;
+    setPostCallModalVisible(true);
+  }
+
+  async function submitPostCallReview() {
+    const targetId = metadata?.consultation?.id || consultationIdNumber;
+    if (!targetId) {
+      goToBalancePayment();
+      return;
+    }
+
+    setSubmittingPostCallReview(true);
+    try {
+      await clientApi.submitReview({
+        consultation_id: targetId,
+        rating: postCallRating,
+        comment: postCallComment.trim() || null,
+      });
+      showCallBanner('Thank you for your feedback.', 'star-outline');
+      goToBalancePayment();
+    } catch (reviewError: any) {
+      Alert.alert(
+        'Review Not Saved',
+        reviewError?.response?.data?.message || 'We could not save the review right now. You can still continue to payment.',
+        [
+          { text: 'Try Again', style: 'cancel' },
+          { text: 'Continue to Payment', onPress: goToBalancePayment },
+        ],
+      );
+    } finally {
+      setSubmittingPostCallReview(false);
+    }
+  }
+
+  function endCallForTimeLimit() {
+    if (callExpired) return;
+    setCallExpired(true);
+    showCallBanner('Consultation time limit reached. The call has ended.', 'time-outline');
+    if (metadata && user) {
+      whisper(createSignal(metadata, user, 'consultation-ended'));
+    }
+    cleanup(false);
+    setCallStatus('Time limit reached', 'This consultation call has ended because the scheduled duration is over.');
+    showPostCallPrompt();
+  }
+
   useEffect(() => {
     mountedRef.current = true;
     void loadMetadata();
@@ -677,6 +986,14 @@ export default function VideoCallScreen() {
     return () => {
       mountedRef.current = false;
       cleanup(false);
+      if (lawyerJoinedBannerTimerRef.current) {
+        clearTimeout(lawyerJoinedBannerTimerRef.current);
+        lawyerJoinedBannerTimerRef.current = null;
+      }
+      if (callBannerTimerRef.current) {
+        clearTimeout(callBannerTimerRef.current);
+        callBannerTimerRef.current = null;
+      }
     };
   }, [consultationIdNumber, user?.id]);
 
@@ -687,13 +1004,32 @@ export default function VideoCallScreen() {
   }, [metadata?.can_join, metadata?.signaling_channel, webrtc]);
 
   useEffect(() => {
+    const timer = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!callWindow || callExpired) return;
+
+    if (remainingMs != null && remainingMs <= 5 * 60 * 1000 && remainingMs > 0 && !timeLimitWarned) {
+      setTimeLimitWarned(true);
+      showCallBanner('5 minutes left in this consultation.', 'time-outline');
+    }
+
+    if (remainingMs != null && remainingMs <= 0) {
+      endCallForTimeLimit();
+    }
+  }, [callWindow?.endMs, remainingMs, callExpired, timeLimitWarned]);
+
+  useEffect(() => {
     if (!metadata || metadata.can_join || isLawyer || !consultationIdNumber) return;
 
     const timer = setInterval(() => {
       void clientApi.consultationStatus(consultationIdNumber)
-        .then((response) => {
+        .then((response: any) => {
           if (!mountedRef.current || !response?.data?.lawyer_in_video_call) return;
           setMetadata((current) => current ? { ...current, can_join: true } : current);
+          updatePeerOnline(true, 'Your lawyer joined the call.');
           setCallStatus('Lawyer is ready', 'Your lawyer opened the session. Starting the secure call.');
         })
         .catch(() => {
@@ -741,6 +1077,12 @@ export default function VideoCallScreen() {
               <Ionicons name="calendar" size={14} color="#D9E4F5" />
               <Text style={styles.datePillText}>{scheduledAtLabel}</Text>
             </View>
+            <View style={[styles.timerPill, callTimerTone === 'warning' && styles.timerPillWarning, (callTimerTone === 'danger' || callTimerTone === 'ended') && styles.timerPillDanger]}>
+              <Ionicons name="time-outline" size={14} color={callTimerTone === 'danger' || callTimerTone === 'ended' ? '#FECACA' : callTimerTone === 'warning' ? '#FDE68A' : '#BBF7D0'} />
+              <Text style={[styles.timerPillText, callTimerTone === 'warning' && styles.timerPillTextWarning, (callTimerTone === 'danger' || callTimerTone === 'ended') && styles.timerPillTextDanger]}>
+                {callTimerLabel}
+              </Text>
+            </View>
           </View>
         </View>
       ) : null}
@@ -763,6 +1105,24 @@ export default function VideoCallScreen() {
             </View>
           )}
 
+          {!isLawyer && lawyerJoinedBannerVisible ? (
+            <View style={[styles.lawyerJoinedBanner, fullScreen && styles.lawyerJoinedBannerFullScreen]}>
+              <View style={styles.lawyerJoinedIcon}>
+                <Ionicons name="checkmark-circle" size={18} color="#052E2B" />
+              </View>
+              <Text style={styles.lawyerJoinedBannerText}>{lawyerJoinedBannerText}</Text>
+            </View>
+          ) : null}
+
+          {callBannerVisible ? (
+            <View style={[styles.callStateBanner, fullScreen && styles.callStateBannerFullScreen]}>
+              <View style={styles.callStateIcon}>
+                <Ionicons name={callBannerIcon as any} size={18} color="#E0F2FE" />
+              </View>
+              <Text style={styles.callStateBannerText}>{callBannerText}</Text>
+            </View>
+          ) : null}
+
           <View style={styles.localTile}>
             {localStreamUrl && RTCView && !cameraOff ? (
               <RTCView streamURL={localStreamUrl} style={styles.localVideo} objectFit="cover" mirror zOrder={1} />
@@ -779,6 +1139,13 @@ export default function VideoCallScreen() {
               <Ionicons name="contract-outline" size={18} color="#FFFFFF" />
               <Text style={styles.fullScreenExitText}>Exit Full Screen</Text>
             </TouchableOpacity>
+          ) : null}
+
+          {fullScreen && callWindow ? (
+            <View style={[styles.fullScreenTimer, callTimerTone === 'warning' && styles.timerPillWarning, (callTimerTone === 'danger' || callTimerTone === 'ended') && styles.timerPillDanger]}>
+              <Ionicons name="time-outline" size={16} color={callTimerTone === 'danger' || callTimerTone === 'ended' ? '#FECACA' : callTimerTone === 'warning' ? '#FDE68A' : '#BBF7D0'} />
+              <Text style={[styles.fullScreenTimerText, callTimerTone === 'warning' && styles.timerPillTextWarning, (callTimerTone === 'danger' || callTimerTone === 'ended') && styles.timerPillTextDanger]}>{callTimerLabel}</Text>
+            </View>
           ) : null}
         </View>
 
@@ -806,6 +1173,10 @@ export default function VideoCallScreen() {
                   <Text style={styles.detailLabel}>Date & Time</Text>
                   <Text style={styles.detailValue}>{scheduledAtLabel}</Text>
                 </View>
+                <View style={styles.detailItem}>
+                  <Text style={styles.detailLabel}>Time Remaining</Text>
+                  <Text style={styles.detailValue}>{callTimerLabel}</Text>
+                </View>
               </View>
             </View>
           </ScrollView>
@@ -821,9 +1192,9 @@ export default function VideoCallScreen() {
           <Ionicons name={cameraOff ? 'videocam-off' : 'videocam'} size={24} color="#fff" />
           <Text style={styles.controlText}>{cameraOff ? 'Camera Off' : 'Camera'}</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.controlButton} disabled>
-          <Ionicons name="desktop-outline" size={24} color="#94A3B8" />
-          <Text style={[styles.controlText, styles.controlTextDisabled]}>Share</Text>
+        <TouchableOpacity style={[styles.controlButton, screenSharing && styles.controlButtonActive]} onPress={toggleScreenShare} disabled={!localStreamUrl}>
+          <Ionicons name={screenSharing ? 'stop-circle-outline' : 'desktop-outline'} size={24} color="#fff" />
+          <Text style={styles.controlText}>{screenSharing ? 'Stop Share' : 'Share'}</Text>
         </TouchableOpacity>
         <TouchableOpacity style={[styles.controlButton, fullScreen && styles.controlButtonActive]} onPress={toggleFullScreen}>
           <Ionicons name={fullScreen ? 'contract-outline' : 'expand-outline'} size={24} color="#fff" />
@@ -838,6 +1209,51 @@ export default function VideoCallScreen() {
           <Text style={styles.controlText}>Leave</Text>
         </TouchableOpacity>
       </View>
+
+      <Modal
+        visible={postCallModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {}}
+      >
+        <View style={styles.postCallOverlay}>
+          <View style={styles.postCallCard}>
+            <View style={styles.postCallIconWrap}>
+              <Ionicons name="checkmark-circle" size={34} color="#BBF7D0" />
+            </View>
+            <Text style={styles.postCallTitle}>Thanks for joining the consultation</Text>
+            <Text style={styles.postCallCopy}>
+              Your session with {callPartnerName} has ended. Please rate your lawyer before continuing to the remaining balance payment.
+            </Text>
+            <View style={styles.postCallStars}>
+              {[1, 2, 3, 4, 5].map((star) => (
+                <TouchableOpacity key={star} onPress={() => setPostCallRating(star)} disabled={submittingPostCallReview}>
+                  <Ionicons name={star <= postCallRating ? 'star' : 'star-outline'} size={34} color="#FACC15" />
+                </TouchableOpacity>
+              ))}
+            </View>
+            <TextInput
+              style={styles.postCallInput}
+              multiline
+              placeholder="Share a quick note about your consultation (optional)"
+              placeholderTextColor="#94A3B8"
+              value={postCallComment}
+              onChangeText={setPostCallComment}
+              editable={!submittingPostCallReview}
+            />
+            <TouchableOpacity style={styles.postCallPrimaryBtn} onPress={submitPostCallReview} disabled={submittingPostCallReview}>
+              {submittingPostCallReview ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.postCallPrimaryText}>Submit & Pay Remaining Balance</Text>
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.postCallSecondaryBtn} onPress={goToBalancePayment} disabled={submittingPostCallReview}>
+              <Text style={styles.postCallSecondaryText}>Skip Review, Continue to Payment</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -954,6 +1370,37 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '800',
   },
+  timerPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    backgroundColor: 'rgba(22, 101, 52, 0.28)',
+    borderWidth: 1,
+    borderColor: 'rgba(34, 197, 94, 0.28)',
+  },
+  timerPillWarning: {
+    backgroundColor: 'rgba(146, 64, 14, 0.28)',
+    borderColor: 'rgba(245, 158, 11, 0.36)',
+  },
+  timerPillDanger: {
+    backgroundColor: 'rgba(127, 29, 29, 0.36)',
+    borderColor: 'rgba(239, 68, 68, 0.42)',
+  },
+  timerPillText: {
+    color: '#BBF7D0',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  timerPillTextWarning: {
+    color: '#FDE68A',
+  },
+  timerPillTextDanger: {
+    color: '#FECACA',
+  },
   content: {
     flex: 1,
     gap: 12,
@@ -1046,6 +1493,84 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     borderRadius: 999,
   },
+  lawyerJoinedBanner: {
+    position: 'absolute',
+    left: 14,
+    right: 132,
+    top: 14,
+    zIndex: 14,
+    elevation: 14,
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#5EEAD4',
+    borderWidth: 1,
+    borderColor: 'rgba(240, 253, 250, 0.8)',
+    shadowColor: '#14B8A6',
+    shadowOpacity: 0.28,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 8 },
+  },
+  lawyerJoinedBannerFullScreen: {
+    left: 14,
+    right: 150,
+    top: 58,
+  },
+  lawyerJoinedIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#CCFBF1',
+  },
+  lawyerJoinedBannerText: {
+    flex: 1,
+    color: '#052E2B',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  callStateBanner: {
+    position: 'absolute',
+    left: 14,
+    right: 132,
+    top: 72,
+    zIndex: 15,
+    elevation: 15,
+    minHeight: 46,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(15, 23, 42, 0.92)',
+    borderWidth: 1,
+    borderColor: 'rgba(125, 211, 252, 0.38)',
+  },
+  callStateBannerFullScreen: {
+    left: 14,
+    right: 150,
+    top: 112,
+  },
+  callStateIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(14, 165, 233, 0.32)',
+  },
+  callStateBannerText: {
+    flex: 1,
+    color: '#E0F2FE',
+    fontSize: 13,
+    fontWeight: '900',
+  },
   fullScreenExitBtn: {
     position: 'absolute',
     top: 14,
@@ -1064,6 +1589,27 @@ const styles = StyleSheet.create({
   },
   fullScreenExitText: {
     color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  fullScreenTimer: {
+    position: 'absolute',
+    top: 14,
+    right: 14,
+    zIndex: 12,
+    elevation: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    backgroundColor: 'rgba(22, 101, 52, 0.72)',
+    borderWidth: 1,
+    borderColor: 'rgba(34, 197, 94, 0.32)',
+  },
+  fullScreenTimerText: {
+    color: '#BBF7D0',
     fontSize: 12,
     fontWeight: '900',
   },
@@ -1252,5 +1798,85 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 15,
     fontWeight: '900',
+  },
+  postCallOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(2, 6, 23, 0.72)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+  },
+  postCallCard: {
+    width: '100%',
+    borderRadius: 24,
+    backgroundColor: '#071221',
+    borderWidth: 1,
+    borderColor: '#1D2B45',
+    padding: 20,
+    alignItems: 'center',
+  },
+  postCallIconWrap: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(34, 197, 94, 0.18)',
+    marginBottom: 14,
+  },
+  postCallTitle: {
+    color: '#F8FBFF',
+    fontSize: 21,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  postCallCopy: {
+    color: '#CBD5E1',
+    fontSize: 14,
+    lineHeight: 21,
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  postCallStars: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 18,
+  },
+  postCallInput: {
+    width: '100%',
+    minHeight: 96,
+    marginTop: 18,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#24344F',
+    backgroundColor: '#0F172A',
+    color: '#F8FBFF',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    textAlignVertical: 'top',
+    fontSize: 14,
+  },
+  postCallPrimaryBtn: {
+    width: '100%',
+    minHeight: 52,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 16,
+    backgroundColor: '#2563EB',
+  },
+  postCallPrimaryText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  postCallSecondaryBtn: {
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+  },
+  postCallSecondaryText: {
+    color: '#93C5FD',
+    fontSize: 13,
+    fontWeight: '800',
   },
 });

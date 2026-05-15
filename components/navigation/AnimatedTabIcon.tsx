@@ -27,11 +27,6 @@ function AnimatedTabIcon({ focused, color, size, name }: AnimatedTabIconProps) {
     });
   }, [focused, progress]);
 
-  const bubbleStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(progress.value, [0, 1], [0, 1]),
-    transform: [{ scale: interpolate(progress.value, [0, 1], [0.75, 1]) }],
-  }));
-
   const iconStyle = useAnimatedStyle(() => ({
     transform: [
       { scale: interpolate(progress.value, [0, 1], [1, 1.12]) },
@@ -41,7 +36,6 @@ function AnimatedTabIcon({ focused, color, size, name }: AnimatedTabIconProps) {
 
   return (
     <Animated.View style={styles.wrap}>
-      <Animated.View style={[styles.bubble, bubbleStyle]} />
       <Animated.View style={iconStyle}>
         <Ionicons name={name} size={size} color={color} />
       </Animated.View>
@@ -55,13 +49,6 @@ const styles = StyleSheet.create({
     height: 34,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  bubble: {
-    position: 'absolute',
-    width: 34,
-    height: 26,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.14)',
   },
 });
 

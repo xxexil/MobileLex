@@ -40,6 +40,8 @@ function getActionLabel(activity: NotificationActivity) {
       return 'Join Call';
     case 'payments':
       return 'Pay Now';
+    case 'team':
+      return 'Open Team';
     default:
       return 'View';
   }

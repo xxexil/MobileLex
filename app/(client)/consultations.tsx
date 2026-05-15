@@ -29,6 +29,11 @@ import { LARAVEL_API_BASE } from '@/services/endpoints';
 import EmptyState from '@/components/EmptyState';
 import { PaymentProcessingModal } from '@/components/PaymentProcessingModal';
 import FeedbackModal from '@/components/FeedbackModal';
+import {
+  CLIENT_DOUBLE_BOOKING_MESSAGE,
+  extractConsultationList,
+  hasClientBookingConflict,
+} from '@/utils/clientBookingConflicts';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useAuth } from '@/context/auth';
 import {
@@ -61,7 +66,8 @@ const isExpoGo = Constants.appOwnership === 'expo';
 const Notifications = !isExpoGo
   ? (require('expo-notifications') as typeof import('expo-notifications'))
   : null;
-const REMINDER_OFFSET_MINUTES = 10;
+const REMINDER_OFFSET_MINUTES = 5;
+const CALL_JOIN_LEAD_MINUTES = 5;
 const JOIN_ALARM_PREFIX = 'consultation_join_alarm_';
 
 function getMobileCallbackUrl(path: string): string {
@@ -99,7 +105,12 @@ interface Consultation {
   duration_minutes?: number;
   price?: number;
   has_review?: boolean;
-  lawyer?: { id: number; name: string };
+  lawyer?: { id: number; name: string; phone?: string; email?: string; location?: string };
+  location?: string;
+  meeting_location?: string;
+  address?: string;
+  phone?: string;
+  lawyer_phone?: string;
   paid?: boolean;
   payment_id?: number;
   payment_status?: string;
@@ -211,6 +222,13 @@ export default function ClientConsultations() {
     }
     setBookingLoading(true);
     try {
+      const existingConsultationsResponse = await clientApi.consultations();
+      const existingConsultations = extractConsultationList(existingConsultationsResponse?.data);
+      if (hasClientBookingConflict(existingConsultations, bookingDate, bookingDuration)) {
+        Alert.alert('Schedule Conflict', CLIENT_DOUBLE_BOOKING_MESSAGE);
+        return;
+      }
+
       console.log('📱 Booking consultation...');
       const { data } = await clientApi.bookConsultation({
         lawyer_id: bookingLawyerId,
@@ -995,10 +1013,20 @@ export default function ClientConsultations() {
   }
 
   async function confirmAndJoinCall(item: Consultation) {
+    if (normalizeConsultationType(item.type) !== 'video') {
+      Alert.alert('Video Unavailable', 'This consultation is not a video session.');
+      return;
+    }
+
     const scheduledTime = new Date(item.scheduled_at).getTime();
     const now = Date.now();
     const durationMinutes = Number(item.duration_minutes || 60);
     const callEndTime = scheduledTime + durationMinutes * 60 * 1000;
+    const joinAvailability = getJoinAvailability(item, now);
+    if (!scheduledTime || Number.isNaN(scheduledTime)) {
+      Alert.alert('Invalid Schedule', 'This consultation schedule is invalid.');
+      return;
+    }
     // Custom logic: Only allow joining if user has paid (item.paid === true)
     if (item.paid === false) {
       Alert.alert('Payment Required', 'You must complete payment before joining the call.');
@@ -1025,21 +1053,21 @@ export default function ClientConsultations() {
       return;
     }
 
-    if (now < scheduledTime && !item.can_join_video && !item.lawyer_in_video_call) {
+    if (now < joinAvailability.availableAt && !item.can_join_video && !item.lawyer_in_video_call) {
       try {
         const response = await clientApi.consultationStatus(item.id);
         const lawyerInCall = Boolean(response?.data?.lawyer_in_video_call);
         if (!lawyerInCall) {
           Alert.alert(
             'Call Not Started',
-            `You can join at ${formatTimeShort(item.scheduled_at)}, or earlier once your lawyer opens the session.`
+            `You can join at ${formatTimeShort(joinAvailability.availableAt)}, or earlier once your lawyer opens the session.`
           );
           return;
         }
       } catch {
         Alert.alert(
           'Call Not Started',
-          `You can join at ${formatTimeShort(item.scheduled_at)}, or earlier once your lawyer opens the session.`
+          `You can join at ${formatTimeShort(joinAvailability.availableAt)}, or earlier once your lawyer opens the session.`
         );
         return;
       }
@@ -1057,6 +1085,28 @@ export default function ClientConsultations() {
         title: item.type || 'Consultation',
       },
     });
+  }
+
+  function openPhoneSession(item: Consultation) {
+    const phoneNumber = String(item.lawyer?.phone || item.lawyer_phone || item.phone || '').trim();
+    if (!phoneNumber) {
+      Alert.alert('Phone Number Unavailable', 'No lawyer phone number is attached to this consultation yet.');
+      return;
+    }
+
+    void Linking.openURL(`tel:${phoneNumber}`).catch(() => {
+      Alert.alert('Call Failed', 'Could not open the phone dialer on this device.');
+    });
+  }
+
+  function showInPersonSession(item: Consultation) {
+    const location = String(item.meeting_location || item.location || item.address || item.lawyer?.location || '').trim();
+    Alert.alert(
+      'In-person Session',
+      location
+        ? `Please meet your lawyer at:\n\n${location}`
+        : 'This is an in-person consultation. The meeting location is not attached yet. Please check your messages or contact your lawyer.',
+    );
   }
 
   if (loading) {
@@ -1352,6 +1402,8 @@ export default function ClientConsultations() {
             const hasUnpaidBalance = item.status === 'completed'
               && !!item.balance_payment_id
               && item.balance_payment_status !== 'paid';
+            const joinAvailability = getJoinAvailability(item);
+            const typeMeta = getConsultationTypeMeta(item.type);
             return (
               <View style={[styles.card, Number(item.id) === targetConsultationId && styles.cardHighlighted]}>
                 <View style={styles.cardTop}>
@@ -1362,7 +1414,7 @@ export default function ClientConsultations() {
                 </View>
                 <Text style={styles.lawyerName}>{lawyerName}</Text>
                 <Text style={styles.meta}>{formatDate(item.scheduled_at)}</Text>
-                <Text style={styles.meta}>{(item.type || 'Consultation').toUpperCase()} • {item.duration_minutes || 0} min</Text>
+                <Text style={styles.meta}>{typeMeta.label.toUpperCase()} • {item.duration_minutes || 0} min</Text>
                 {/* Payment badge moved to cardBottom */}
                 {showRefundBadge ? (
                   <View style={[styles.paymentBadge, { backgroundColor: `${Colors.warning}16`, borderColor: `${Colors.warning}40`, marginTop: 8 }]}>
@@ -1411,7 +1463,7 @@ export default function ClientConsultations() {
                         <Text style={styles.reminderBtnText}>Remind Me</Text>
                       </TouchableOpacity>
                     )}
-                    {item.status === 'upcoming' && (
+                    {item.status === 'upcoming' && typeMeta.type === 'video' && joinAvailability.canJoin && (
                       <TouchableOpacity
                         style={[styles.reviewBtn, { backgroundColor: Colors.info, borderColor: Colors.info }]}
                         onPress={() => confirmAndJoinCall(item)}
@@ -1419,6 +1471,30 @@ export default function ClientConsultations() {
                         <Ionicons name="videocam-outline" size={15} color="#fff" />
                         <Text style={[styles.reviewBtnText, { color: '#fff' }]}>Join Call</Text>
                       </TouchableOpacity>
+                    )}
+                    {item.status === 'upcoming' && typeMeta.type === 'phone' && (
+                      <TouchableOpacity
+                        style={[styles.reviewBtn, { backgroundColor: Colors.info, borderColor: Colors.info }]}
+                        onPress={() => openPhoneSession(item)}
+                      >
+                        <Ionicons name="call-outline" size={15} color="#fff" />
+                        <Text style={[styles.reviewBtnText, { color: '#fff' }]}>Call Lawyer</Text>
+                      </TouchableOpacity>
+                    )}
+                    {item.status === 'upcoming' && typeMeta.type === 'in-person' && (
+                      <TouchableOpacity
+                        style={[styles.reviewBtn, { backgroundColor: Colors.primary, borderColor: Colors.primary }]}
+                        onPress={() => showInPersonSession(item)}
+                      >
+                        <Ionicons name="business-outline" size={15} color="#fff" />
+                        <Text style={[styles.reviewBtnText, { color: '#fff' }]}>Session Details</Text>
+                      </TouchableOpacity>
+                    )}
+                    {item.status === 'upcoming' && typeMeta.type === 'video' && !joinAvailability.canJoin && joinAvailability.tooEarly && (
+                      <View style={styles.joinUnavailableBanner}>
+                        <Ionicons name="time-outline" size={15} color="#96A0AE" />
+                        <Text style={styles.joinUnavailableText}>Available {formatTimeShort(joinAvailability.availableAt)}</Text>
+                      </View>
                     )}
                     {hasUnpaidBalance && (
                       <TouchableOpacity
@@ -1532,7 +1608,7 @@ function formatDate(date: string) {
   }).replace(' AM', ' am').replace(' PM', ' pm');
 }
 
-function formatTimeShort(date: string) {
+function formatTimeShort(date: string | number | Date) {
   if (!date) return '';
   const d = new Date(date);
   if (Number.isNaN(d.getTime())) return '';
@@ -1544,6 +1620,37 @@ function formatTimeShort(date: string) {
   if (hours === 0) hours = 12;
 
   return `${hours}:${minutes}${suffix}`;
+}
+
+function normalizeConsultationType(type?: string) {
+  return String(type || 'video').trim().toLowerCase().replace(/[_\s]+/g, '-');
+}
+
+function getConsultationTypeMeta(type?: string) {
+  const normalized = normalizeConsultationType(type);
+  if (normalized === 'phone') return { type: normalized, icon: 'call-outline', label: 'Phone' };
+  if (normalized === 'in-person') return { type: normalized, icon: 'business-outline', label: 'In-person' };
+  return { type: 'video', icon: 'videocam-outline', label: 'Video' };
+}
+
+function getJoinAvailability(item: Consultation, now = Date.now()) {
+  if (normalizeConsultationType(item.type) !== 'video') {
+    return { canJoin: false, availableAt: 0, tooEarly: false };
+  }
+
+  const scheduledTime = new Date(item.scheduled_at).getTime();
+  if (!scheduledTime || Number.isNaN(scheduledTime)) {
+    return { canJoin: false, availableAt: 0, tooEarly: false };
+  }
+
+  const durationMinutes = Number(item.duration_minutes || 60);
+  const callEndTime = scheduledTime + durationMinutes * 60 * 1000;
+  const availableAt = scheduledTime - CALL_JOIN_LEAD_MINUTES * 60 * 1000;
+  const sessionOpened = Boolean(item.can_join_video || item.lawyer_in_video_call);
+  const canJoin = item.status === 'upcoming' && now <= callEndTime && (now >= availableAt || sessionOpened);
+  const tooEarly = item.status === 'upcoming' && now < availableAt && !sessionOpened;
+
+  return { canJoin, availableAt, tooEarly };
 }
 
 const styles = StyleSheet.create({
@@ -1720,6 +1827,18 @@ const styles = StyleSheet.create({
   },
   reminderBtnText: { color: Colors.primary, fontWeight: '700', fontSize: 12 },
   reviewBtnText: { color: Colors.secondary, fontWeight: '700', fontSize: 12 },
+  joinUnavailableBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: '#D1D5DB',
+    minWidth: 148,
+  },
+  joinUnavailableText: { color: '#96A0AE', fontWeight: '800', fontSize: 12 },
   reviewedBadge: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   reviewedText: { color: Colors.success, fontWeight: '700', fontSize: 12 },
   modalOverlay: { flex: 1, backgroundColor: '#0008', justifyContent: 'flex-end' },

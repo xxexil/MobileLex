@@ -7,8 +7,11 @@
     "start": "node ./scripts/check-hosts.js && expo start",
     "start:skip-check": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
-    "android": "node ./scripts/check-hosts.js && expo run:android",
-    "ios": "node ./scripts/check-hosts.js && expo run:ios",
+    "android": "node ./scripts/check-hosts.js --mobile-only && expo run:android",
+    "android:usb": "node ./scripts/check-hosts.js --mobile-only && expo run:android",
+    "android:wireless": "node ./scripts/android-wireless.js",
+    "start:lan": "node ./scripts/check-hosts.js --mobile-only && expo start --lan",
+    "ios": "node ./scripts/check-hosts.js --mobile-only && expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint"
   },

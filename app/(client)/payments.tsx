@@ -39,12 +39,14 @@ type NormalizedPaymentStatus = 'paid' | 'pending' | 'refunded' | 'processing' | 
 
 interface PaymentItem {
   id: number;
+  consultation_id?: number;
   amount?: number;
   status?: PaymentStatus;
   created_at?: string;
   paid_at?: string;
   type?: string;
   consultation?: {
+    id?: number;
     code?: string;
     service_type?: string;
     consultation_type?: string;
@@ -173,8 +175,9 @@ function extractCheckoutUrl(source: any): string | undefined {
 export default function ClientPayments() {
   const router = useRouter();
   const navigation = useNavigation();
-  const params = useLocalSearchParams<{ backTo?: string }>();
+  const params = useLocalSearchParams<{ backTo?: string; consultationId?: string; fromSessionEnd?: string; autoPay?: string }>();
   const backHandledRef = useRef(false);
+  const autoPayAttemptedRef = useRef(false);
   const [payments, setPayments] = useState<PaymentItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -337,6 +340,25 @@ export default function ClientPayments() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (loading || autoPayAttemptedRef.current) return;
+    const targetConsultationId = Number(params.consultationId || 0);
+    const shouldAutoPay = params.fromSessionEnd === '1' || params.autoPay === '1';
+    if (!shouldAutoPay || !targetConsultationId) return;
+
+    const balancePayment = normalizedPayments.find((payment) => {
+      const paymentConsultationId = Number(payment.consultation_id || payment.consultation?.id || 0);
+      const isTarget = paymentConsultationId === targetConsultationId;
+      const isBalance = String(payment.type || '').toLowerCase().includes('balance');
+      const isPayable = payment.normalizedStatus === 'pending' || payment.normalizedStatus === 'processing';
+      return isTarget && isBalance && isPayable;
+    });
+
+    if (!balancePayment) return;
+    autoPayAttemptedRef.current = true;
+    void handleResumePayment(balancePayment.id);
+  }, [loading, normalizedPayments, params.autoPay, params.consultationId, params.fromSessionEnd, handleResumePayment]);
 
   if (loading) {
     return (

@@ -36,6 +36,27 @@ const DOCUMENT_MIME_TYPES = [
 ];
 const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
 
+function getErrorText(error: any) {
+  const errors = error?.response?.data?.errors;
+  if (errors) return Object.values(errors).flat().join('\n');
+  return String(error?.response?.data?.message ?? error?.message ?? '');
+}
+
+function isDuplicateFirmNameError(error: any) {
+  const message = getErrorText(error).toLowerCase();
+  return (
+    message.includes('firm')
+    && message.includes('name')
+    && (
+      message.includes('already')
+      || message.includes('taken')
+      || message.includes('unique')
+      || message.includes('duplicate')
+      || message.includes('exists')
+    )
+  );
+}
+
 function getPasswordStrength(password: string) {
   if (!password) return { label: '', color: undefined };
   if (password.length < 6) return { label: 'Weak', color: '#B00020' };
@@ -177,6 +198,10 @@ export default function RegisterScreen() {
       data.location = location;
       data.firm_name = firmName;
     } else if (role === 'law_firm') {
+      if (!firmName.trim()) {
+        Alert.alert('Firm Name Required', 'Please enter a unique law firm name before registering.');
+        return;
+      }
       data.name = name;
       data.firm_name = firmName;
       data.city = city;
@@ -191,6 +216,13 @@ export default function RegisterScreen() {
       await setSession(res.token, res.user);
       router.replace('/');
     } catch (err: any) {
+      if (role === 'law_firm' && isDuplicateFirmNameError(err)) {
+        Alert.alert(
+          'Law Firm Name Already Exists',
+          'A law firm with this name is already registered. Please use a unique firm name.'
+        );
+        return;
+      }
       const errors = err?.response?.data?.errors;
       if (errors) {
         const msg = Object.values(errors).flat().join('\n');

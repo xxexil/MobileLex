@@ -21,6 +21,11 @@ import { clientApi } from '@/services/api';
 import { useAuth } from '@/context/auth';
 import { Colors } from '@/constants/theme';
 import { LARAVEL_API_BASE } from '@/services/endpoints';
+import {
+  CLIENT_DOUBLE_BOOKING_MESSAGE,
+  extractConsultationList,
+  hasClientBookingConflict,
+} from '@/utils/clientBookingConflicts';
 import Constants from 'expo-constants';
 import * as ExpoLinking from 'expo-linking';
 import { openAuthSessionAsync } from 'expo-web-browser';
@@ -30,8 +35,9 @@ const TYPES = ['video', 'phone', 'in-person'];
 const BOOKING_PAYMENT_METHODS = ['card', 'gcash', 'dob'];
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const TIME_PICKER_HOURS = Array.from({ length: 12 }, (_, index) => index + 1);
-const TIME_PICKER_MINUTES = Array.from({ length: 12 }, (_, index) => index * 5);
+const TIME_PICKER_MINUTES = Array.from({ length: 60 }, (_, index) => index);
 const TIME_PICKER_MERIDIEMS = ['AM', 'PM'] as const;
+const MIN_BOOKING_LEAD_MINUTES = 5;
 const CASE_DOCUMENT_EXTENSIONS = ['jpg', 'jpeg', 'png', 'pdf', 'doc', 'docx'];
 const CASE_DOCUMENT_MIME_TYPES = ['image/*', 'application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
 const MAX_CASE_DOCUMENT_BYTES = 10 * 1024 * 1024;
@@ -127,7 +133,7 @@ function getTimeParts(timeKey: string) {
   const safeMinute = Number.isFinite(minute) ? minute : 0;
   return {
     hour12: safeHour % 12 || 12,
-    minute: Math.max(0, Math.min(55, Math.round(safeMinute / 5) * 5)),
+    minute: Math.max(0, Math.min(59, safeMinute)),
     meridiem: safeHour >= 12 ? 'PM' as const : 'AM' as const,
   };
 }
@@ -145,13 +151,24 @@ function clampBookingMonth(value: Date) {
   return formatMonthValue(value) < formatMonthValue(currentMonth) ? currentMonth : getMonthStart(value);
 }
 
+function getMinimumBookableTime(base = new Date()) {
+  const minimum = new Date(base.getTime() + MIN_BOOKING_LEAD_MINUTES * 60 * 1000);
+  minimum.setSeconds(0, 0);
+  return minimum;
+}
+
 function getNextBookableTime() {
-  const next = new Date(Date.now() + 60 * 60 * 1000);
-  next.setMinutes(Math.ceil(next.getMinutes() / 5) * 5, 0, 0);
-  if (next.getMinutes() === 60) {
-    next.setHours(next.getHours() + 1, 0, 0, 0);
-  }
+  const next = getMinimumBookableTime();
   return next;
+}
+
+function getDefaultBookTimeForDate(dateKey: string, currentTime = '') {
+  if (dateKey === formatDateValue(getTodayStart())) {
+    const next = getNextBookableTime();
+    return `${pad(next.getHours())}:${pad(next.getMinutes())}`;
+  }
+
+  return normalizeTimeValue(currentTime) || '09:00';
 }
 
 function getCalendarDays(value: Date) {
@@ -543,7 +560,7 @@ export default function LawyerDetailScreen() {
     if (!slotTime) return false;
     if (!isTodaySelected) return true;
     const slotDate = new Date(`${bookDate}T${slotTime}:00`);
-    return slotDate.getTime() > currentNow.getTime();
+    return slotDate.getTime() >= getMinimumBookableTime(currentNow).getTime();
   });
   const groupedSlots = {
     morning: filteredSlots.filter((slot) => Number(normalizeTimeValue(slot.time).split(':')[0]) < 12),
@@ -564,11 +581,10 @@ export default function LawyerDetailScreen() {
       setBookDate(fallbackDate);
       setCalendarMonth(clampBookingMonth(new Date(`${fallbackDate}T00:00:00`)));
     }
-    if (!bookTime) {
-      const availableTime = firstSlotTime(filteredSlots);
-      if (availableTime) {
-        setBookTime(availableTime);
-      }
+    const currentTime = normalizeTimeValue(bookTime);
+    const pickedDateTime = currentTime ? new Date(`${fallbackDate}T${currentTime}:00`) : null;
+    if (!currentTime || (fallbackDate === todayKey && pickedDateTime && pickedDateTime < getMinimumBookableTime())) {
+      setBookTime(getDefaultBookTimeForDate(fallbackDate, currentTime));
     }
     setDateTimePickerVisible(true);
   }
@@ -581,29 +597,8 @@ export default function LawyerDetailScreen() {
       next.meridiem ?? current.meridiem,
     );
     const pickedDateTime = new Date(`${bookDate || formatDateValue(getTodayStart())}T${nextTime}:00`);
-    if (bookDate === formatDateValue(getTodayStart()) && pickedDateTime <= new Date()) {
-      const fallback = firstSlotTime(filteredSlots);
-      if (fallback) {
-        setBookTime(fallback);
-      }
-      return;
-    }
-    if (!hasSlotTime(filteredSlots, nextTime)) {
-      const matchingSlot = filteredSlots.find((slot) => {
-        const parts = getTimeParts(normalizeTimeValue(slot.time));
-        return (
-          (next.hour12 == null || parts.hour12 === next.hour12)
-          && (next.minute == null || parts.minute === next.minute)
-          && (next.meridiem == null || parts.meridiem === next.meridiem)
-        );
-      });
-      const matchingTime = matchingSlot ? normalizeTimeValue(matchingSlot.time) : '';
-      if (matchingTime) {
-        setBookTime(matchingTime);
-        return;
-      }
-
-      Alert.alert('Unavailable Time', 'Please choose one of the lawyer\'s available time slots.');
+    if (bookDate === formatDateValue(getTodayStart()) && pickedDateTime < getMinimumBookableTime()) {
+      Alert.alert('Invalid Time', `Please choose a time at least ${MIN_BOOKING_LEAD_MINUTES} minutes from now.`);
       return;
     }
     setBookTime(nextTime);
@@ -617,15 +612,10 @@ export default function LawyerDetailScreen() {
     }
 
     const scheduled = new Date(`${bookDate}T${bookTime || '00:00'}:00`);
-    if (!bookTime || Number.isNaN(scheduled.getTime()) || scheduled <= new Date()) {
-      Alert.alert('Invalid Time', 'Please choose a future time for the consultation.');
+    if (!bookTime || Number.isNaN(scheduled.getTime()) || scheduled < getMinimumBookableTime()) {
+      Alert.alert('Invalid Time', `Please choose a time at least ${MIN_BOOKING_LEAD_MINUTES} minutes from now.`);
       return;
     }
-    if (!hasSlotTime(filteredSlots, bookTime)) {
-      Alert.alert('Unavailable Time', 'Please choose one of the lawyer\'s available time slots.');
-      return;
-    }
-
     setDateTimePickerVisible(false);
   }
 
@@ -735,13 +725,13 @@ export default function LawyerDetailScreen() {
     }
 
     const scheduled = new Date(`${dateStr}T${timeStr}:00`);
-    if (Number.isNaN(scheduled.getTime()) || scheduled <= new Date()) {
-      Alert.alert('Invalid Date', 'Please choose a valid future date and time.');
+    if (Number.isNaN(scheduled.getTime()) || scheduled < getMinimumBookableTime()) {
+      Alert.alert('Invalid Date', `Please choose a valid date and time at least ${MIN_BOOKING_LEAD_MINUTES} minutes from now.`);
       return;
     }
 
-    if (blockedDates.has(dateStr) || unavailableDates.has(dateStr) || !hasSlotTime(filteredSlots, timeStr)) {
-      Alert.alert('Schedule Unavailable', 'This lawyer is unavailable during the selected time. Please choose a different schedule.');
+    if (blockedDates.has(dateStr) || unavailableDates.has(dateStr)) {
+      Alert.alert('Schedule Unavailable', 'This lawyer is unavailable during the selected date. Please choose a different schedule.');
       return;
     }
 
@@ -751,6 +741,13 @@ export default function LawyerDetailScreen() {
     let submittedConsultationCode = '';
 
     try {
+      const existingConsultationsResponse = await clientApi.consultations();
+      const existingConsultations = extractConsultationList(existingConsultationsResponse?.data);
+      if (hasClientBookingConflict(existingConsultations, scheduled, duration)) {
+        Alert.alert('Schedule Conflict', CLIENT_DOUBLE_BOOKING_MESSAGE);
+        return;
+      }
+
       const bookingPayload = {
         lawyer_id: Number(id),
         scheduled_at: formatLocalDateTime(scheduled),
@@ -1037,24 +1034,22 @@ export default function LawyerDetailScreen() {
   const monthLabel = calendarMonth.toLocaleDateString('en-PH', { month: 'long', year: 'numeric' });
   const canGoPrevMonth = formatMonthValue(calendarMonth) > formatMonthValue(currentMonth);
   const selectedDateTimeLabel = formatBookingDateTime(bookDate, bookTime);
-  const selectedSlotLabel = filteredSlots.find((slot) => normalizeTimeValue(slot.time) === normalizeTimeValue(bookTime))?.label || 'No time selected';
+  const selectedSlotLabel = bookTime
+    ? new Date(`2000-01-01T${bookTime}:00`).toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' })
+    : 'No time selected';
   const selectedTimeParts = getTimeParts(bookTime || '09:00');
   const isPickedTimeUnavailable = (next: Partial<{ hour12: number; minute: number; meridiem: 'AM' | 'PM' }>) => {
-    if (!bookDate || !filteredSlots.length) return true;
-    return !filteredSlots.some((slot) => {
-      const slotTime = normalizeTimeValue(slot.time);
-      if (!slotTime) return false;
-      const slotDate = new Date(`${bookDate}T${slotTime}:00`);
-      if (slotDate <= new Date()) return false;
-      const parts = getTimeParts(slotTime);
-      return (
-        (next.hour12 == null || parts.hour12 === next.hour12)
-        && (next.minute == null || parts.minute === next.minute)
-        && (next.meridiem == null || parts.meridiem === next.meridiem)
-      );
-    });
+    if (!bookDate) return true;
+    const current = getTimeParts(bookTime || '09:00');
+    const nextTime = buildTimeValue(
+      next.hour12 ?? current.hour12,
+      next.minute ?? current.minute,
+      next.meridiem ?? current.meridiem,
+    );
+    const pickedDateTime = new Date(`${bookDate}T${nextTime}:00`);
+    return bookDate === todayKey && pickedDateTime < getMinimumBookableTime();
   };
-  const isScheduleUnavailable = !bookDate || !bookTime || blockedDates.has(bookDate) || unavailableDates.has(bookDate) || !hasSlotTime(filteredSlots, bookTime);
+  const isScheduleUnavailable = !bookDate || !bookTime || blockedDates.has(bookDate) || unavailableDates.has(bookDate);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Colors.background }}>
@@ -1270,13 +1265,13 @@ export default function LawyerDetailScreen() {
                           isBlocked && styles.calendarDayBlocked,
                           !isBlocked && isUnavailable && styles.calendarDayUnavailable,
                         ]}
-                        disabled={isDisabled}
-                        onPress={() => {
-                          if (bookDate !== dateKey) {
-                            setBookTime('');
-                            setBookDate(dateKey);
-                          }
-                        }}
+                          disabled={isDisabled}
+                          onPress={() => {
+                            if (bookDate !== dateKey) {
+                              setBookDate(dateKey);
+                              setBookTime(getDefaultBookTimeForDate(dateKey, bookTime));
+                            }
+                          }}
                       >
                         <Text
                           style={[
@@ -1534,7 +1529,7 @@ export default function LawyerDetailScreen() {
                           disabled={isDisabled}
                           onPress={() => {
                             setBookDate(dateKey);
-                            setBookTime('');
+                            setBookTime(getDefaultBookTimeForDate(dateKey, bookTime));
                           }}
                         >
                           <Text
@@ -1564,8 +1559,10 @@ export default function LawyerDetailScreen() {
                   <TouchableOpacity
                     onPress={() => {
                       const today = new Date();
+                      const todayValue = formatDateValue(today);
                       setCalendarMonth(getMonthStart(today));
-                      setBookDate(formatDateValue(today));
+                      setBookDate(todayValue);
+                      setBookTime(getDefaultBookTimeForDate(todayValue, bookTime));
                     }}
                   >
                     <Text style={styles.datePickerQuickText}>Today</Text>

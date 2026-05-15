@@ -181,6 +181,7 @@ export default function ClientDashboardScreen() {
   const [loading, setLoading] = useState(true);
   const [appointmentTab, setAppointmentTab] = useState<ConsultationStatus>('upcoming');
   const [isSlidingRate, setIsSlidingRate] = useState(false);
+  const [slidingMaxRate, setSlidingMaxRate] = useState<number | null>(null);
   const [selectedSpecialty, setSelectedSpecialty] = useState('All');
   const [selectedLocation, setSelectedLocation] = useState('All');
   const [showAdvancedSearch, setShowAdvancedSearch] = useState(false);
@@ -192,7 +193,7 @@ export default function ClientDashboardScreen() {
   const [savedLawyerCount, setSavedLawyerCount] = useState(0);
   const sliderWidthRef = useRef(0);
   const maxRateRef = useRef<number | null>(null);
-  const lastSliderCommitRef = useRef(0);
+  const isSlidingRateRef = useRef(false);
 
   const rateBounds = useMemo(() => {
     const values = lawyers
@@ -332,6 +333,7 @@ export default function ClientDashboardScreen() {
   const sliderMin = rateBounds.min;
   const sliderMax = Math.max(rateBounds.max, rateBounds.min + 1);
   const effectiveMaxRate = maxRate ?? sliderMax;
+  const displayedMaxRate = slidingMaxRate ?? effectiveMaxRate;
   const sliderRatio = Math.min(1, Math.max(0, (effectiveMaxRate - sliderMin) / (sliderMax - sliderMin)));
   const sliderThumbSize = 34;
   const sliderThumbRadius = sliderThumbSize / 2;
@@ -342,7 +344,13 @@ export default function ClientDashboardScreen() {
     maxRateRef.current = maxRate;
   }, [maxRate]);
 
-  const commitRateFromPosition = useCallback((positionX: number, force = false) => {
+  const setSlidingRateState = useCallback((next: boolean) => {
+    if (isSlidingRateRef.current === next) return;
+    isSlidingRateRef.current = next;
+    setIsSlidingRate(next);
+  }, []);
+
+  const commitRateFromPosition = useCallback((positionX: number) => {
     const width = sliderWidthRef.current;
     if (!width) return;
 
@@ -350,11 +358,19 @@ export default function ClientDashboardScreen() {
     const ratio = clampedX / width;
     const next = Math.round(sliderMin + (sliderMax - sliderMin) * ratio);
     if (maxRateRef.current === next) return;
-    const now = Date.now();
-    if (!force && now - lastSliderCommitRef.current < 64) return;
-    lastSliderCommitRef.current = now;
     maxRateRef.current = next;
     setMaxRate(next);
+    setSlidingMaxRate(null);
+  }, [sliderMin, sliderMax]);
+
+  const previewRateFromPosition = useCallback((positionX: number) => {
+    const width = sliderWidthRef.current;
+    if (!width) return;
+
+    const clampedX = Math.max(0, Math.min(positionX, width));
+    const ratio = clampedX / width;
+    const next = Math.round(sliderMin + (sliderMax - sliderMin) * ratio);
+    setSlidingMaxRate((current) => (current === next ? current : next));
   }, [sliderMin, sliderMax]);
 
   const sliderGesture = useMemo(() => Gesture.Pan()
@@ -366,20 +382,20 @@ export default function ClientDashboardScreen() {
       if (width <= 0) return;
       const nextX = Math.max(0, Math.min(event.x, width));
       sliderPosition.value = nextX;
-      runOnJS(setIsSlidingRate)(true);
-      runOnJS(commitRateFromPosition)(nextX, true);
+      runOnJS(setSlidingRateState)(true);
+      runOnJS(previewRateFromPosition)(nextX);
     })
     .onUpdate((event) => {
       const width = sliderWidthShared.value;
       if (width <= 0) return;
       const nextX = Math.max(0, Math.min(event.x, width));
       sliderPosition.value = nextX;
-      runOnJS(commitRateFromPosition)(nextX, false);
+      runOnJS(previewRateFromPosition)(nextX);
     })
     .onFinalize(() => {
-      runOnJS(commitRateFromPosition)(sliderPosition.value, true);
-      runOnJS(setIsSlidingRate)(false);
-    }), [commitRateFromPosition, sliderPosition, sliderWidthShared]);
+      runOnJS(commitRateFromPosition)(sliderPosition.value);
+      runOnJS(setSlidingRateState)(false);
+    }), [commitRateFromPosition, previewRateFromPosition, setSlidingRateState, sliderPosition, sliderWidthShared]);
 
   const onSliderLayout = useCallback((event: { nativeEvent: { layout: { width: number } } }) => {
     const nextWidth = event.nativeEvent.layout.width;
@@ -481,6 +497,7 @@ export default function ClientDashboardScreen() {
     setSelectedSpecialty('All');
     setSelectedLocation('All');
     setMaxRate(sliderMax);
+    setSlidingMaxRate(null);
     setMinRateInput('0');
     setMaxRateInput(String(sliderMax));
     setMinExperience(0);
@@ -1043,7 +1060,7 @@ export default function ClientDashboardScreen() {
             </View>
           </View>
 
-          <Text style={styles.rateText}>Max Rate: {formatMoney(effectiveMaxRate)}/hr</Text>
+          <Text style={styles.rateText}>Max Rate: {formatMoney(displayedMaxRate)}/hr</Text>
 
           <GestureDetector gesture={sliderGesture}>
             <View

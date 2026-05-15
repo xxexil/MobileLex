@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -15,6 +15,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors } from '@/constants/theme';
 import { lawFirmApi } from '@/services/api';
 import ConfirmActionModal from '@/components/ConfirmActionModal';
+import { useNotifications } from '@/context/notifications';
+import {
+  buildAcceptedElsewhereActivity,
+  extractApplicationList,
+  getAcceptedFirmName,
+  isAcceptedElsewhereApplication,
+} from '@/utils/firmApplications';
 
 const Ionicons = IoniconsBase as any;
 const ROLE_FILTERS = ['all', 'lawyer', 'admin'] as const;
@@ -60,6 +67,7 @@ function extractList(payload: any, keys: string[]) {
 }
 
 export default function LawFirmTeam() {
+  const { addActivity, triggerLawFirmUnreadRefresh } = useNotifications();
   const [members, setMembers] = useState<any[]>([]);
   const [applications, setApplications] = useState<any[]>([]);
   const [apiError, setApiError] = useState<string | null>(null);
@@ -69,6 +77,7 @@ export default function LawFirmTeam() {
   const [refreshing, setRefreshing] = useState(false);
   const [actioningId, setActioningId] = useState<number | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
+  const acceptedElsewhereNotifiedRef = useRef<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     const [teamRes, appsRes] = await Promise.allSettled([
@@ -88,7 +97,16 @@ export default function LawFirmTeam() {
 
     if (appsRes.status === 'fulfilled') {
       const payload = appsRes.value?.data;
-      setApplications(extractList(payload, ['applications', 'pending_applications']));
+      const nextApplications = extractApplicationList(payload);
+      nextApplications
+        .filter(isAcceptedElsewhereApplication)
+        .forEach((application) => {
+          const activity = buildAcceptedElsewhereActivity(application);
+          if (acceptedElsewhereNotifiedRef.current.has(activity.id)) return;
+          acceptedElsewhereNotifiedRef.current.add(activity.id);
+          addActivity(activity);
+        });
+      setApplications(nextApplications);
     } else {
       setApplications([]);
       issues.push(String(appsRes.reason?.response?.data?.message ?? appsRes.reason?.message ?? 'Failed to load applications.'));
@@ -97,7 +115,7 @@ export default function LawFirmTeam() {
     setApiError(issues.length ? issues.join(' | ') : null);
     setLoading(false);
     setRefreshing(false);
-  }, []);
+  }, [addActivity]);
 
   useEffect(() => {
     load();
@@ -129,6 +147,7 @@ export default function LawFirmTeam() {
         try {
           await lawFirmApi.acceptApplication(appId);
           setApplications((prev) => prev.filter((entry) => entry.id !== appId));
+          triggerLawFirmUnreadRefresh();
           await load();
         } catch (err: any) {
           Alert.alert('Error', err?.response?.data?.message ?? 'Failed to accept application.');
@@ -137,7 +156,7 @@ export default function LawFirmTeam() {
         }
       },
     });
-  }, [load]);
+  }, [load, triggerLawFirmUnreadRefresh]);
 
   const handleReject = useCallback((appId: number, lawyerName: string) => {
     setPendingAction({
@@ -151,6 +170,7 @@ export default function LawFirmTeam() {
         try {
           await lawFirmApi.rejectApplication(appId);
           setApplications((prev) => prev.filter((entry) => entry.id !== appId));
+          triggerLawFirmUnreadRefresh();
         } catch (err: any) {
           Alert.alert('Error', err?.response?.data?.message ?? 'Failed to reject application.');
         } finally {
@@ -158,7 +178,7 @@ export default function LawFirmTeam() {
         }
       },
     });
-  }, []);
+  }, [triggerLawFirmUnreadRefresh]);
 
   const handleRemoveMember = useCallback((memberId: number, memberName: string) => {
     setPendingAction({
@@ -382,6 +402,8 @@ export default function LawFirmTeam() {
           ) : applications.map((app, index) => {
             const lawyer = app?.lawyer ?? {};
             const isActioning = actioningId === app?.id;
+            const acceptedElsewhere = isAcceptedElsewhereApplication(app);
+            const acceptedFirmName = getAcceptedFirmName(app);
             return (
               <View key={String(app?.id ?? index)} style={styles.applicationCard}>
                 <View style={styles.memberIdentity}>
@@ -397,10 +419,18 @@ export default function LawFirmTeam() {
                   </View>
                 </View>
                 {app?.message ? <Text style={styles.applicationMessage}>“{app.message}”</Text> : null}
+                {acceptedElsewhere ? (
+                  <View style={styles.acceptedElsewhereNotice}>
+                    <Ionicons name="information-circle-outline" size={16} color="#B45309" />
+                    <Text style={styles.acceptedElsewhereText}>
+                      Already accepted to {acceptedFirmName || 'another law firm'}.
+                    </Text>
+                  </View>
+                ) : null}
                 <View style={styles.actionRow}>
                   <TouchableOpacity
-                    style={[styles.primaryBtn, isActioning && styles.btnDisabled]}
-                    disabled={isActioning}
+                    style={[styles.primaryBtn, (isActioning || acceptedElsewhere) && styles.btnDisabled]}
+                    disabled={isActioning || acceptedElsewhere}
                     onPress={() => handleAccept(app.id, lawyer?.name ?? 'this lawyer')}
                   >
                     {isActioning ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="checkmark" size={15} color="#FFFFFF" />}
@@ -603,6 +633,19 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   applicationMessage: { color: '#6B7E93', marginTop: 12, lineHeight: 20, fontSize: 14 },
+  acceptedElsewhereNotice: {
+    marginTop: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#FCD34D',
+    backgroundColor: '#FFFBEB',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  acceptedElsewhereText: { flex: 1, color: '#92400E', fontSize: 13, fontWeight: '800', lineHeight: 18 },
   removeBtn: {
     height: 40,
     borderRadius: 12,

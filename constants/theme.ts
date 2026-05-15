@@ -64,11 +64,11 @@ export const RoleColors = {
     background: '#F0F2F5',
   },
   admin: {
-    shell: '#1A1A2E',
-    shellDark: '#16213E',
-    accent: '#7C3AED',
-    accentSoft: '#EDE9FE',
-    background: '#F1F3F8',
+    shell: '#1E2D4D',
+    shellDark: '#162240',
+    accent: '#B5860D',
+    accentSoft: '#FFF5DC',
+    background: '#F0F2F5',
   },
 };
 

@@ -1364,7 +1364,7 @@ export default function MessagesScreen() {
 
   if (selected) {
     return (
-      <SafeAreaView key={`thread-${selected.id}`} style={styles.container} edges={['top', 'left', 'right']}>
+      <SafeAreaView key={`thread-${selected.id}`} style={styles.container} edges={['top', 'bottom', 'left', 'right']}>
         <View style={styles.chatHeader}>
           <TouchableOpacity onPress={handleConversationBack}>
             <Icon name="arrow-back" size={22} color="#fff" />
@@ -1857,7 +1857,7 @@ export default function MessagesScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom', 'left', 'right']}>
       <Animated.View
         style={{
           opacity: screenEntrance,

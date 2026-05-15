@@ -149,7 +149,7 @@ export default function NotificationCenterScreen() {
     router.push({ pathname: groupChatRoute, params: { groupId: String(groupId), fromNotification: '1' } } as any);
   };
 
-  const openActivity = (activity: { routeKind?: 'messages' | 'consultations' | 'group-chat' | 'video-call' | 'payments'; conversationId?: number; consultationId?: number; groupId?: number; mode?: 'one-on-one' | 'group'; title?: string }) => {
+  const openActivity = (activity: { routeKind?: 'messages' | 'consultations' | 'group-chat' | 'video-call' | 'payments' | 'team'; conversationId?: number; consultationId?: number; groupId?: number; mode?: 'one-on-one' | 'group'; title?: string }) => {
     if (activity.routeKind === 'messages') {
       openConversation(activity.conversationId, { fromNotification: true });
       return;
@@ -161,16 +161,30 @@ export default function NotificationCenterScreen() {
     }
 
     if (activity.routeKind === 'video-call') {
+      const params = {
+        ...(activity.consultationId
+          ? { consultationId: String(activity.consultationId), mode: 'consultation' }
+          : { mode: activity.mode ?? 'one-on-one' }),
+        ...(activity.conversationId ? { conversationId: String(activity.conversationId) } : {}),
+        ...(activity.groupId ? { groupId: String(activity.groupId) } : {}),
+        ...(activity.title ? { title: activity.title } : {}),
+      };
+
       if (user?.role === 'lawyer') {
-        router.push({ pathname: '/(lawyer)/video-call', params: activity.conversationId ? { conversationId: String(activity.conversationId), mode: activity.mode ?? 'one-on-one', title: activity.title ?? '' } : {} } as any);
+        router.push({ pathname: '/(lawyer)/video-call', params } as any);
       } else if (user?.role === 'client') {
-        router.push({ pathname: '/(client)/video-call', params: activity.conversationId ? { conversationId: String(activity.conversationId), mode: activity.mode ?? 'one-on-one', title: activity.title ?? '' } : {} } as any);
+        router.push({ pathname: '/(client)/video-call', params } as any);
       }
       return;
     }
 
     if (activity.routeKind === 'payments' && user?.role === 'client') {
       router.push({ pathname: paymentsRoute, params: activity.consultationId ? { consultationId: String(activity.consultationId), fromNotification: '1' } : {} } as any);
+      return;
+    }
+
+    if (activity.routeKind === 'team' && user?.role === 'law_firm') {
+      router.push('/(lawfirm)/team' as any);
       return;
     }
 
