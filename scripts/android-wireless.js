@@ -55,11 +55,12 @@ function parseEnvFile(filePath) {
 
 function getAdbCommand() {
   const exe = process.platform === 'win32' ? 'adb.exe' : 'adb';
+  const localAppData = process.env.LOCALAPPDATA || process.env.LocalAppData || process.env.localappdata;
   const candidates = [
     process.env.ANDROID_HOME,
     process.env.ANDROID_SDK_ROOT,
-    process.platform === 'win32' && process.env.LOCALAPPDATA
-      ? path.join(process.env.LOCALAPPDATA, 'Android', 'Sdk')
+    process.platform === 'win32' && localAppData
+      ? path.join(localAppData, 'Android', 'Sdk')
       : '',
   ].filter(Boolean);
 
@@ -121,6 +122,49 @@ Android 11+ Wireless debugging:
 function normalizeDeviceTarget(device, fallbackPort) {
   if (!device) return '';
   return device.includes(':') ? device : `${device}:${fallbackPort}`;
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function getExpoDeviceName(devicesOutput, target) {
+  const line = (devicesOutput || '')
+    .split('\n')
+    .map((entry) => entry.trim())
+    .find((entry) => entry.startsWith(`${target}\t`) || entry.startsWith(`${target} `));
+  if (!line) return target;
+
+  const modelItem = line.split(/\s+/).find((item) => item.startsWith('model:'));
+  return modelItem ? modelItem.slice('model:'.length) : target;
+}
+
+function parseAdbDevices(devicesOutput) {
+  return (devicesOutput || '')
+    .split('\n')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry && !entry.toLowerCase().startsWith('list of devices'))
+    .map((entry) => {
+      const [id, state] = entry.split(/\s+/);
+      return { id, state };
+    })
+    .filter((device) => device.id && device.state);
+}
+
+function cleanupWirelessAdbDevices(adb, target) {
+  const targetHost = target.split(':')[0];
+  if (!targetHost) return;
+
+  const devices = parseAdbDevices(run(adb, ['devices', '-l']).output);
+  devices
+    .filter((device) => device.id.includes(':'))
+    .filter((device) => device.id.split(':')[0] === targetHost)
+    .filter((device) => device.id !== target || device.state !== 'device')
+    .forEach((device) => {
+      console.log(`Disconnecting stale wireless adb target ${device.id} (${device.state})...`);
+      const disconnectResult = run(adb, ['disconnect', device.id]);
+      if (disconnectResult.output) console.log(disconnectResult.output);
+    });
 }
 
 function getUsbDeviceIds(adb) {
@@ -241,12 +285,14 @@ if (args.tcpip) {
 }
 
 if (target) {
+  cleanupWirelessAdbDevices(adb, target);
   console.log(`\nConnecting to ${target}...`);
   const connectResult = run(adb, ['connect', target]);
   if (connectResult.output) console.log(connectResult.output);
   if (connectResult.status !== 0 || /failed|unable|cannot|refused/i.test(connectResult.output || '')) {
     const refused = /refused|10061/i.test(connectResult.output || '');
-    if (!args.tcpip && refused) {
+    const hasExplicitPort = args.device.includes(':');
+    if (!args.tcpip && refused && !hasExplicitPort) {
       const tcpipResult = enableTcpip(adb, args.port);
       if (tcpipResult.ok) {
         console.log(`\nRetrying ${target}...`);
@@ -264,6 +310,9 @@ if (target) {
       }
     } else {
       console.error('\nWireless ADB connection failed. Confirm the phone and PC are on the same Wi-Fi network.');
+      if (refused && hasExplicitPort) {
+        console.error('That IP:port is not accepting adb connections right now. Reopen Wireless debugging and use the current IP address & port.');
+      }
       if (target.endsWith(':5555')) {
         console.error('Android 11+ Wireless debugging uses the IP address and port shown on the phone, not 5555.');
         console.error('Example from your phone: npm run android:wireless -- --device 192.168.110.188:38053');
@@ -277,12 +326,13 @@ if (target) {
   process.exit(1);
 }
 
-const devices = run(adb, ['devices']);
+const devices = run(adb, ['devices', '-l']);
 if (devices.output) console.log(`\n${devices.output}`);
-if (!devices.output.includes(target) || !new RegExp(`${target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s+device`).test(devices.output)) {
+if (!devices.output.includes(target) || !new RegExp(`${escapeRegExp(target)}\\s+device`).test(devices.output)) {
   console.error(`\n${target} is not listed as an active adb device.`);
   process.exit(1);
 }
+const expoDeviceName = getExpoDeviceName(devices.output, target);
 
 const expoEnv = {
   ...process.env,
@@ -291,11 +341,14 @@ const expoEnv = {
 };
 
 console.log(`\nStarting Expo Android build for ${target}...`);
+if (expoDeviceName !== target) {
+  console.log(`Expo device name: ${expoDeviceName}`);
+}
 if (expoEnv.REACT_NATIVE_PACKAGER_HOSTNAME) {
   console.log(`Metro host: ${expoEnv.REACT_NATIVE_PACKAGER_HOSTNAME}`);
 }
 
-const expoResult = runNpx(['expo', 'run:android', '--device'], {
+const expoResult = runNpx(['expo', 'run:android', '--device', expoDeviceName], {
   env: expoEnv,
   stdio: 'inherit',
 });

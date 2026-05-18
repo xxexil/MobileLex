@@ -242,9 +242,10 @@ export default function LawyerConsultations() {
 
     const scheduledTime = new Date(item.scheduled_at).getTime();
     const now = Date.now();
-    const windowMinutes = 10; // Only allow joining within 10 minutes before and after scheduled time
+    const windowMinutes = 10;
+    const durationMinutes = Number(item.duration_minutes || 60);
     const windowStart = scheduledTime - windowMinutes * 60 * 1000;
-    const windowEnd = scheduledTime + windowMinutes * 60 * 1000;
+    const windowEnd = scheduledTime + durationMinutes * 60 * 1000;
     // Custom logic: Only allow joining if client has paid (item.paid === true)
     if (item.paid === false) {
       Alert.alert('Payment Required', 'The client must complete payment before you can join the call.');
@@ -265,7 +266,7 @@ export default function LawyerConsultations() {
     if (now > windowEnd) {
       Alert.alert(
         'Too Late',
-        `You can only join the call up to ${windowMinutes} minutes after the scheduled time.`
+        'This consultation call window has already ended.'
       );
       return;
     }
@@ -321,6 +322,15 @@ export default function LawyerConsultations() {
     void Linking.openURL(`tel:${phoneNumber}`).catch(() => {
       Alert.alert('Call Failed', 'Could not open the phone dialer on this device.');
     });
+
+    Alert.alert(
+      'Phone Session',
+      'After the call is finished, mark this consultation complete so the time slot becomes available again.',
+      [
+        { text: 'Not Yet', style: 'cancel' },
+        { text: 'Mark Complete', onPress: () => action(() => lawyerApi.completeConsultation(item.id), item.id) },
+      ],
+    );
   }
 
   function showInPersonSession(item: any) {

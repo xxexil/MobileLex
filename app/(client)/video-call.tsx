@@ -71,6 +71,7 @@ type SignalPayload = {
 
 const CALL_TIME_WARNING_MINUTES = 10;
 const CALL_TIME_FINAL_WARNING_MINUTES = 5;
+const CALL_END_GRACE_MS = 5 * 60 * 1000;
 
 let cachedWebRtc: WebRtcModule | null = null;
 
@@ -91,6 +92,16 @@ function normalizeSessionDescription(description: any, expectedType: 'offer' | '
     return null;
   }
   return normalized;
+}
+
+function isWrongStableStateError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return /wrong state:\s*stable/i.test(message) || /state:\s*stable/i.test(message);
+}
+
+function isStaleNegotiationError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return isWrongStableStateError(error) || /order of m-lines/i.test(message);
 }
 
 function serializeIceCandidate(candidate: any) {
@@ -162,6 +173,33 @@ function formatDuration(ms: number) {
   return `${minutes}:${padDurationPart(seconds)}`;
 }
 
+async function configureCallAudioSession() {
+  await forceAndroidCommunicationAudioRoute();
+}
+
+async function forceAndroidCommunicationAudioRoute() {
+  if (Platform.OS === 'android' && NativeModules.LexAudioRoute?.startCommunicationMode) {
+    try {
+      const routeState = await NativeModules.LexAudioRoute.startCommunicationMode(true);
+      console.log('[VideoCall] Android audio route', routeState);
+      return routeState;
+    } catch (audioRouteError) {
+      console.warn('[VideoCall] could not force Android call audio route', audioRouteError);
+    }
+  }
+  return null;
+}
+
+async function restoreDefaultAudioSession() {
+  if (Platform.OS === 'android' && NativeModules.LexAudioRoute?.stopCommunicationMode) {
+    try {
+      await NativeModules.LexAudioRoute.stopCommunicationMode();
+    } catch (audioRouteError) {
+      console.warn('[VideoCall] could not restore Android call audio route', audioRouteError);
+    }
+  }
+}
+
 function createSignal(
   metadata: ConsultationVideoMetadata,
   user: { id: number; role?: string },
@@ -222,9 +260,15 @@ export default function VideoCallScreen() {
   const lawyerJoinedBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lawyerJoinedBannerShownRef = useRef(false);
   const callBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const remoteAudioWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const remoteAudioStatsTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const peerOnlineRef = useRef(false);
   const postCallPromptShownRef = useRef(false);
   const mountedRef = useRef(true);
+  const callAudioConfiguredRef = useRef(false);
+  const completionSubmittedRef = useRef(false);
+  const remoteAudioSeenRef = useRef(false);
+  const lastRemoteAudioPacketsRef = useRef(0);
 
   const [metadata, setMetadata] = useState<ConsultationVideoMetadata | null>(null);
   const [loading, setLoading] = useState(true);
@@ -238,6 +282,7 @@ export default function VideoCallScreen() {
   const [callBannerVisible, setCallBannerVisible] = useState(false);
   const [callBannerText, setCallBannerText] = useState('');
   const [callBannerIcon, setCallBannerIcon] = useState('information-circle-outline');
+  const [remoteAudioStatus, setRemoteAudioStatus] = useState('Remote audio pending');
   const [localStreamUrl, setLocalStreamUrl] = useState<string | null>(null);
   const [remoteStreamUrl, setRemoteStreamUrl] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
@@ -375,9 +420,17 @@ export default function VideoCallScreen() {
   }
 
   function closePeerConnection() {
+    if (remoteAudioWatchdogRef.current) {
+      clearTimeout(remoteAudioWatchdogRef.current);
+      remoteAudioWatchdogRef.current = null;
+    }
+    stopRemoteAudioStatsPolling();
     pcRef.current?.close?.();
     pcRef.current = null;
     pendingCandidatesRef.current = [];
+    remoteAudioSeenRef.current = false;
+    lastRemoteAudioPacketsRef.current = 0;
+    setRemoteAudioStatus('Remote audio pending');
   }
 
   function stopFallbackSignaling() {
@@ -404,6 +457,126 @@ export default function VideoCallScreen() {
     setScreenSharing(false);
   }
 
+  async function ensureCallAudioSession() {
+    if (callAudioConfiguredRef.current) return;
+    try {
+      await configureCallAudioSession();
+      callAudioConfiguredRef.current = true;
+    } catch (audioError) {
+      console.warn('[VideoCall] could not configure call audio session', audioError);
+    }
+  }
+
+  function resetCallAudioSession() {
+    if (!callAudioConfiguredRef.current) return;
+    callAudioConfiguredRef.current = false;
+    void restoreDefaultAudioSession().catch((audioError) => {
+      console.warn('[VideoCall] could not restore audio session', audioError);
+    });
+  }
+
+  function nudgeAndroidAudioRoute() {
+    if (Platform.OS !== 'android') return;
+    void forceAndroidCommunicationAudioRoute().then(updateAudioRouteStatus);
+    setTimeout(() => void forceAndroidCommunicationAudioRoute().then(updateAudioRouteStatus), 500);
+    setTimeout(() => void forceAndroidCommunicationAudioRoute().then(updateAudioRouteStatus), 1500);
+  }
+
+  function updateAudioRouteStatus(routeState: any) {
+    if (!routeState || !mountedRef.current) return;
+    const output = String(routeState.communicationDevice || '').trim();
+    const voiceVolume = Number(routeState.voiceCallVolume ?? 0);
+    const voiceMax = Number(routeState.voiceCallMaxVolume ?? 0);
+    console.log('[VideoCall] Android route state', routeState);
+    if (output) {
+      setRemoteAudioStatus(`Speaker route: ${output}${voiceMax ? ` (${voiceVolume}/${voiceMax})` : ''}`);
+    }
+  }
+
+  function hasRemoteAudioTrack(pc = pcRef.current) {
+    const streamAudioTracks = remoteStreamRef.current?.getAudioTracks?.() || [];
+    if (streamAudioTracks.some((track: any) => track.readyState !== 'ended')) return true;
+
+    const receivers = pc?.getReceivers?.() || [];
+    return receivers.some((receiver: any) => receiver?.track?.kind === 'audio' && receiver.track.readyState !== 'ended');
+  }
+
+  async function readRemoteAudioStats(pc: PeerConnectionLike) {
+    if (typeof pc?.getStats !== 'function') return null;
+    const summary = {
+      packetsReceived: 0,
+      bytesReceived: 0,
+      audioLevel: 0,
+      reports: 0,
+    };
+    try {
+      const stats = await pc.getStats();
+      const reports = typeof stats?.forEach === 'function' ? stats : new Map(Object.entries(stats || {}));
+      reports.forEach((report: any) => {
+        if (report?.type === 'inbound-rtp' && (report.kind === 'audio' || report.mediaType === 'audio')) {
+          summary.reports += 1;
+          summary.packetsReceived += Number(report.packetsReceived || 0);
+          summary.bytesReceived += Number(report.bytesReceived || 0);
+          summary.audioLevel = Math.max(summary.audioLevel, Number(report.audioLevel || 0));
+        }
+      });
+      console.log('[VideoCall] inbound audio stats', summary);
+      return summary;
+    } catch (statsError) {
+      console.warn('[VideoCall] could not read remote audio stats', statsError);
+      return null;
+    }
+  }
+
+  function stopRemoteAudioStatsPolling() {
+    if (remoteAudioStatsTimerRef.current) {
+      clearInterval(remoteAudioStatsTimerRef.current);
+      remoteAudioStatsTimerRef.current = null;
+    }
+  }
+
+  function startRemoteAudioStatsPolling(pc: PeerConnectionLike) {
+    if (remoteAudioStatsTimerRef.current) return;
+    remoteAudioStatsTimerRef.current = setInterval(() => {
+      void readRemoteAudioStats(pc).then((stats) => {
+        if (!mountedRef.current || !stats) return;
+        if (stats.reports <= 0) {
+          setRemoteAudioStatus(hasRemoteAudioTrack(pc) ? 'Remote audio track present, waiting for packets' : 'No remote audio track from web');
+          return;
+        }
+
+        const previousPackets = lastRemoteAudioPacketsRef.current;
+        lastRemoteAudioPacketsRef.current = stats.packetsReceived;
+        if (stats.packetsReceived > previousPackets) {
+          setRemoteAudioStatus(`Receiving remote audio (${stats.packetsReceived} packets)`);
+          nudgeAndroidAudioRoute();
+        } else {
+          setRemoteAudioStatus('Remote audio track connected, no new audio packets');
+        }
+      });
+    }, 2500);
+  }
+
+  function scheduleRemoteAudioWatchdog(pc: PeerConnectionLike) {
+    if (remoteAudioWatchdogRef.current) clearTimeout(remoteAudioWatchdogRef.current);
+    remoteAudioWatchdogRef.current = setTimeout(() => {
+      remoteAudioWatchdogRef.current = null;
+      void readRemoteAudioStats(pc);
+      if (hasRemoteAudioTrack(pc)) {
+        remoteAudioSeenRef.current = true;
+        setRemoteAudioStatus('Remote audio track connected');
+        nudgeAndroidAudioRoute();
+        startRemoteAudioStatsPolling(pc);
+        return;
+      }
+
+      console.warn('[VideoCall] connected without a remote audio track; keeping video call stable');
+      setRemoteAudioStatus('Remote audio not detected');
+      showCallBanner('Speaker route refreshed. If you still cannot hear, ask the other side to unmute or tap Reconnect.', 'volume-high-outline');
+      nudgeAndroidAudioRoute();
+    }, 4000);
+  }
+
   function leaveRealtime() {
     if (echoRef.current && metadata?.signaling_channel) {
       echoRef.current.leave(metadata.signaling_channel);
@@ -421,10 +594,12 @@ export default function VideoCallScreen() {
     closePeerConnection();
     leaveRealtime();
     stopLocalMedia();
+    resetCallAudioSession();
   }
 
   async function ensureLocalMedia() {
     if (!webrtc) throw new Error('Native WebRTC is unavailable. Install and open the LexConnect development build, not Expo Go.');
+    await ensureCallAudioSession();
     const existingVideoTracks = localStreamRef.current?.getVideoTracks?.() || [];
     const hasLiveVideo = existingVideoTracks.some((track: any) => track.readyState !== 'ended');
     if (localStreamRef.current && hasLiveVideo) return localStreamRef.current;
@@ -441,7 +616,11 @@ export default function VideoCallScreen() {
     let stream: MediaStreamLike;
     try {
       stream = await webrtc.mediaDevices.getUserMedia({
-        audio: true,
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
         video: {
           facingMode: 'user',
           width: 640,
@@ -456,9 +635,13 @@ export default function VideoCallScreen() {
     localStreamRef.current = stream;
     cameraStreamRef.current = stream;
     const streamUrl = stream.toURL?.();
-    stream.getAudioTracks?.().forEach((track: any) => {
+    const audioTracks = stream.getAudioTracks?.() || [];
+    audioTracks.forEach((track: any) => {
       track.enabled = !muted;
     });
+    if (!audioTracks.length) {
+      throw new Error('Microphone permission is granted, but no microphone audio track was returned.');
+    }
     const videoTracks = stream.getVideoTracks?.() || [];
     if (!videoTracks.length) {
       throw new Error('Camera permission is granted, but no camera video track was returned.');
@@ -474,12 +657,29 @@ export default function VideoCallScreen() {
     return stream;
   }
 
+  function enableRemoteAudio(stream: any) {
+    const audioTracks = stream?.getAudioTracks?.() || [];
+    audioTracks.forEach((track: any) => {
+      track.enabled = true;
+      if (typeof track._setVolume === 'function') {
+        try {
+          track._setVolume(1);
+        } catch (volumeError) {
+          console.warn('[VideoCall] could not set remote audio track volume', volumeError);
+        }
+      }
+    });
+    if (audioTracks.length > 0) {
+      remoteAudioSeenRef.current = true;
+      setRemoteAudioStatus(`Remote audio track connected (${audioTracks.length})`);
+    }
+    return audioTracks.length;
+  }
+
   function showRemoteStream(stream: any) {
     if (!stream) return;
     remoteStreamRef.current = stream;
-    stream.getAudioTracks?.().forEach((track: any) => {
-      track.enabled = true;
-    });
+    const remoteAudioTrackCount = enableRemoteAudio(stream);
     stream.getVideoTracks?.().forEach((track: any) => {
       track.enabled = true;
     });
@@ -487,13 +687,30 @@ export default function VideoCallScreen() {
     if (url) setRemoteStreamUrl(url);
     setLawyerJoinedBannerVisible(false);
     setCallStatus('Call connected', `You are now connected to the ${peerLabel}.`);
+    if (remoteAudioTrackCount > 0) {
+      void ensureCallAudioSession();
+      nudgeAndroidAudioRoute();
+      if (pcRef.current) startRemoteAudioStatsPolling(pcRef.current);
+    }
   }
 
   function handleRemoteTrack(event: any) {
     if (event?.track) {
       event.track.enabled = true;
+      if (event.track.kind === 'audio' && typeof event.track._setVolume === 'function') {
+        try {
+          event.track._setVolume(1);
+        } catch (volumeError) {
+          console.warn('[VideoCall] could not set incoming audio track volume', volumeError);
+        }
+      }
       if (event.track.kind === 'audio') {
+        remoteAudioSeenRef.current = true;
+        setRemoteAudioStatus(`Remote audio ${event.track.readyState || 'connected'}`);
         showCallBanner(`${callPartnerName} audio connected.`, 'volume-high-outline');
+        void ensureCallAudioSession();
+        nudgeAndroidAudioRoute();
+        if (pcRef.current) startRemoteAudioStatsPolling(pcRef.current);
       }
     }
     const stream = event?.streams?.[0] || event?.stream;
@@ -525,6 +742,9 @@ export default function VideoCallScreen() {
 
     const pc = new webrtc.RTCPeerConnection({
       iceServers: metadata.ice_servers?.length ? metadata.ice_servers : [{ urls: 'stun:stun.l.google.com:19302' }],
+      iceCandidatePoolSize: 8,
+      bundlePolicy: 'max-bundle',
+      rtcpMuxPolicy: 'require',
     });
 
     localStreamRef.current?.getTracks?.().forEach((track: any) => {
@@ -545,7 +765,11 @@ export default function VideoCallScreen() {
       const state = String(pc.connectionState || '');
       if (state === 'connected') {
         setCallStatus('Call connected', `You are now connected to the ${peerLabel}.`);
+        nudgeAndroidAudioRoute();
+        startRemoteAudioStatsPolling(pc);
+        scheduleRemoteAudioWatchdog(pc);
       } else if (state === 'failed' || state === 'disconnected') {
+        setRemoteAudioStatus(`Connection ${state}`);
         setCallStatus('Connection interrupted', 'Tap reconnect to renegotiate the WebRTC call.');
       }
     };
@@ -554,12 +778,41 @@ export default function VideoCallScreen() {
     return pc;
   }
 
-  async function createOffer() {
+  async function createOffer(options: Record<string, unknown> = {}) {
     if (!metadata || !user) return;
     await ensureLocalMedia();
+    const existingPc = pcRef.current;
+    const hasExistingNegotiation = Boolean(existingPc?.localDescription || existingPc?.remoteDescription);
+    const connectionState = String(existingPc?.connectionState || '');
+    const signalingState = String(existingPc?.signalingState || '');
+
+    if (hasExistingNegotiation && (connectionState === 'connected' || signalingState === 'stable')) {
+      console.log('[VideoCall] skipped duplicate offer while connection is', connectionState || signalingState);
+      nudgeAndroidAudioRoute();
+      return;
+    }
+
+    if (hasExistingNegotiation && signalingState !== 'stable' && signalingState !== '') {
+      console.log('[VideoCall] skipped offer while signaling state is', signalingState);
+      return;
+    }
+
     const pc = createPeerConnection();
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
+    const offer = await pc.createOffer({
+      offerToReceiveAudio: true,
+      offerToReceiveVideo: true,
+      ...options,
+    });
+    try {
+      await pc.setLocalDescription(offer);
+    } catch (localOfferError) {
+      if (isStaleNegotiationError(localOfferError)) {
+        console.log('[VideoCall] ignored stale local offer while in state', pc.signalingState);
+        nudgeAndroidAudioRoute();
+        return;
+      }
+      throw localOfferError;
+    }
     const localOffer = serializeSessionDescription(pc.localDescription || offer);
     if (!localOffer) throw new Error('Could not create a valid WebRTC offer.');
     whisper(createSignal(metadata, user, 'offer', { sdp: localOffer }));
@@ -568,6 +821,12 @@ export default function VideoCallScreen() {
 
   function reportSignalError(signalError: unknown) {
     const message = signalError instanceof Error ? signalError.message : String(signalError);
+    if (isStaleNegotiationError(signalError)) {
+      console.log('[VideoCall] ignored stale negotiation error', message);
+      setRemoteAudioStatus(hasRemoteAudioTrack(pcRef.current) ? 'Remote audio track connected' : 'Speaker route refreshed');
+      nudgeAndroidAudioRoute();
+      return;
+    }
     console.warn('[VideoCall] signaling error', message);
     setError(message);
     setCallStatus('Call setup error', message);
@@ -589,6 +848,13 @@ export default function VideoCallScreen() {
     console.log('[VideoCall] received signal', payload.type, 'from', payload.fromUserId);
 
     if (payload.type === 'peer-ready') {
+      const connectionState = String(pcRef.current?.connectionState || '');
+      const signalingState = String(pcRef.current?.signalingState || '');
+      if (connectionState === 'connected' || signalingState === 'stable' || signalingState === 'have-local-offer') {
+        console.log('[VideoCall] ignored peer-ready while connection is', connectionState || signalingState);
+        return;
+      }
+
       setCallStatus(`${peerLabel[0].toUpperCase()}${peerLabel.slice(1)} ready`, 'Preparing WebRTC negotiation.');
       if (metadata.is_offer_initiator || isLawyer) {
         await createOffer();
@@ -603,6 +869,14 @@ export default function VideoCallScreen() {
     }
 
     if (payload.type === 'consultation-ended') {
+      if (remainingMs != null && remainingMs > -CALL_END_GRACE_MS) {
+        showCallBanner(`${callPartnerName} ended their side, but your booked time is still active.`, 'time-outline');
+        setCallStatus('Peer left the call', `The ${peerLabel} left. You can stay here or reconnect while the session is still active.`);
+        closePeerConnection();
+        setRemoteStreamUrl(null);
+        updatePeerOnline(false);
+        return;
+      }
       setCallStatus('Consultation ended', `The ${peerLabel} ended the consultation.`);
       closePeerConnection();
       if (!isLawyer) {
@@ -642,15 +916,32 @@ export default function VideoCallScreen() {
     const pc = createPeerConnection();
 
     if (payload.type === 'offer') {
+      const signalingState = String(pc.signalingState || '');
+      if (signalingState !== 'stable' && signalingState !== 'have-remote-offer') {
+        console.log('[VideoCall] ignored offer while in state', pc.signalingState);
+        return;
+      }
+
       setCallStatus('Offer received', `Creating answer for the ${peerLabel}.`);
       const remoteOffer = normalizeSessionDescription(payload.sdp, 'offer');
       if (!remoteOffer) {
         console.warn('[VideoCall] invalid offer payload', payload);
         throw new Error('Received an invalid WebRTC offer from the lawyer.');
       }
-      await pc.setRemoteDescription(remoteOffer);
+      try {
+        await pc.setRemoteDescription(remoteOffer);
+      } catch (remoteOfferError) {
+        if (isWrongStableStateError(remoteOfferError)) {
+          console.log('[VideoCall] ignored stale offer while in state', pc.signalingState);
+          return;
+        }
+        throw remoteOfferError;
+      }
       await flushPendingCandidates(pc);
-      const answer = await pc.createAnswer();
+      const answer = await pc.createAnswer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: true,
+      });
       await pc.setLocalDescription(answer);
       const localAnswer = serializeSessionDescription(pc.localDescription || answer);
       if (!localAnswer) throw new Error('Could not create a valid WebRTC answer.');
@@ -671,7 +962,15 @@ export default function VideoCallScreen() {
         console.warn('[VideoCall] invalid answer payload', payload);
         throw new Error('Received an invalid WebRTC answer from the client.');
       }
-      await pc.setRemoteDescription(remoteAnswer);
+      try {
+        await pc.setRemoteDescription(remoteAnswer);
+      } catch (remoteAnswerError) {
+        if (isWrongStableStateError(remoteAnswerError)) {
+          console.log('[VideoCall] ignored stale answer while in state', pc.signalingState);
+          return;
+        }
+        throw remoteAnswerError;
+      }
       await flushPendingCandidates(pc);
       setCallStatus('Answer received', 'Secure media is finalizing.');
       return;
@@ -917,8 +1216,47 @@ export default function VideoCallScreen() {
   }
 
   function leaveCall() {
+    const targetId = metadata?.consultation?.id || consultationIdNumber;
+    if (isLawyer && targetId && !completionSubmittedRef.current) {
+      Alert.alert(
+        'End Consultation?',
+        'If this session is finished, mark it complete so the time slot becomes available for new bookings.',
+        [
+          {
+            text: 'End Only',
+            style: 'cancel',
+            onPress: () => {
+              cleanup(true);
+              router.back();
+            },
+          },
+          {
+            text: 'Mark Complete',
+            onPress: () => {
+              markConsultationCompleteIfLawyer();
+              cleanup(true);
+              router.back();
+            },
+          },
+        ],
+      );
+      return;
+    }
+
     cleanup(true);
     router.back();
+  }
+
+  function reconnectAudio() {
+    setRemoteAudioStatus(hasRemoteAudioTrack(pcRef.current) ? 'Speaker route refreshed' : 'Remote audio not detected');
+    showCallBanner('Speaker route refreshed.', 'volume-high-outline');
+    void ensureCallAudioSession();
+    nudgeAndroidAudioRoute();
+
+    if (pcRef.current && hasRemoteAudioTrack(pcRef.current)) {
+      void readRemoteAudioStats(pcRef.current);
+      startRemoteAudioStatsPolling(pcRef.current);
+    }
   }
 
   function goToBalancePayment() {
@@ -938,6 +1276,16 @@ export default function VideoCallScreen() {
     if (isLawyer || postCallPromptShownRef.current) return;
     postCallPromptShownRef.current = true;
     setPostCallModalVisible(true);
+  }
+
+  function markConsultationCompleteIfLawyer() {
+    const targetId = metadata?.consultation?.id || consultationIdNumber;
+    if (!isLawyer || !targetId || completionSubmittedRef.current) return;
+    completionSubmittedRef.current = true;
+    void lawyerApi.completeConsultation(targetId).catch((completeError: any) => {
+      completionSubmittedRef.current = false;
+      console.warn('[VideoCall] could not mark consultation complete', completeError?.response?.data || completeError?.message || completeError);
+    });
   }
 
   async function submitPostCallReview() {
@@ -974,9 +1322,7 @@ export default function VideoCallScreen() {
     if (callExpired) return;
     setCallExpired(true);
     showCallBanner('Consultation time limit reached. The call has ended.', 'time-outline');
-    if (metadata && user) {
-      whisper(createSignal(metadata, user, 'consultation-ended'));
-    }
+    markConsultationCompleteIfLawyer();
     cleanup(false);
     setCallStatus('Time limit reached', 'This consultation call has ended because the scheduled duration is over.');
     showPostCallPrompt();
@@ -1027,7 +1373,7 @@ export default function VideoCallScreen() {
       }
     }
 
-    if (remainingMs != null && remainingMs <= 0) {
+    if (remainingMs != null && remainingMs <= -CALL_END_GRACE_MS) {
       endCallForTimeLimit();
     }
   }, [callWindow?.endMs, remainingMs, callExpired, timeLimitWarnedAt]);
@@ -1171,6 +1517,7 @@ export default function VideoCallScreen() {
                 <Text style={styles.statusTitle}>{statusTitle}</Text>
                 <Text style={styles.statusCopy}>{statusCopy}</Text>
                 {error ? <Text style={styles.errorText}>{error}</Text> : null}
+                <Text style={styles.audioStatusText}>{remoteAudioStatus}</Text>
               </View>
 
               <View style={styles.detailCard}>
@@ -1214,6 +1561,10 @@ export default function VideoCallScreen() {
         <TouchableOpacity style={styles.controlButton} onPress={reconnect} disabled={busy || !metadata?.can_join}>
           <Ionicons name="refresh" size={24} color="#fff" />
           <Text style={styles.controlText}>Reconnect</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.controlButton} onPress={reconnectAudio} disabled={busy || !metadata?.can_join}>
+          <Ionicons name="volume-high" size={24} color="#fff" />
+          <Text style={styles.controlText}>Audio</Text>
         </TouchableOpacity>
         <TouchableOpacity style={[styles.controlButton, styles.leaveButton]} onPress={leaveCall}>
           <Ionicons name="call" size={24} color="#fff" />
@@ -1664,6 +2015,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     marginTop: 10,
+  },
+  audioStatusText: {
+    color: '#A7F3D0',
+    fontSize: 12,
+    fontWeight: '800',
+    marginTop: 8,
   },
   detailCard: {
     borderRadius: 22,

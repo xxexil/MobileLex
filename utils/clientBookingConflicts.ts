@@ -3,6 +3,7 @@ const ACTIVE_CLIENT_BOOKING_STATUSES = new Set(['pending', 'upcoming']);
 type ExistingConsultation = {
   id?: number | string;
   status?: string;
+  payment_status?: string;
   scheduled_at?: string;
   duration_minutes?: number | string;
 };
@@ -36,6 +37,9 @@ export function hasClientBookingConflict(
 
     const existingDuration = Number(item?.duration_minutes || 60);
     const existingEndMs = existingStartMs + Math.max(1, existingDuration || 60) * 60 * 1000;
+    const paymentStatus = String(item?.payment_status ?? '').toLowerCase();
+    const isPaid = paymentStatus === 'paid' || paymentStatus === 'downpayment_paid';
+    if (isPaid && existingEndMs <= Date.now()) return false;
 
     return proposedStartMs < existingEndMs && proposedEndMs > existingStartMs;
   });
